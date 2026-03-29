@@ -50,7 +50,7 @@ async function callGeminiAPI(query: string): Promise<string> {
             ],
           },
         ],
-        tools: [{ google_search: {} }],
+        tools: [{ googleSearch: {} }],
         generationConfig: {
           temperature: 0.7,
           maxOutputTokens: 1024,
@@ -58,6 +58,10 @@ async function callGeminiAPI(query: string): Promise<string> {
       }),
     });
     const data = await res.json();
+    if (!res.ok) {
+      console.error("Gemini API HTTP error:", res.status, data);
+      return "I encountered an error connecting to the AI. Please try again.";
+    }
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (text) return text;
     // Fallback: check if grounding returned anything
@@ -69,9 +73,10 @@ async function callGeminiAPI(query: string): Promise<string> {
         .filter(Boolean)
         .join(" ");
     }
-    return "I was unable to process that request.";
-  } catch {
-    return "I was unable to process that request.";
+    return "I received a response but couldn't extract the answer. Please try rephrasing your question.";
+  } catch (err) {
+    console.error("Gemini API error:", err);
+    return "I was unable to connect to the internet. Please check your connection and try again.";
   }
 }
 
