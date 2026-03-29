@@ -6,6 +6,7 @@ import {
   Brain,
   ChevronRight,
   Globe,
+  LogOut,
   MessageSquare,
   Mic,
   MicOff,
@@ -19,6 +20,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConversationEntry } from "./backend";
 import { useActor } from "./hooks/useActor";
+import { useInternetIdentity } from "./hooks/useInternetIdentity";
 import { useGetAllMessages, useIsConnected } from "./hooks/useQueries";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -30,28 +32,67 @@ interface ChatMessage {
   timestamp: number;
 }
 
+const GEMINI_API_KEY = "AIzaSyAFOZHLkAm-kE1-RC6RXwtPIrIFQI1-Na8";
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+async function callGeminiAPI(query: string): Promise<string> {
+  try {
+    const res = await fetch(GEMINI_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: `You are J.A.R.V.I.S., an advanced AI assistant created by YAC. You have access to real-time internet search. Answer accurately and helpfully using current information: ${query}`,
+              },
+            ],
+          },
+        ],
+        tools: [{ google_search: {} }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 1024,
+        },
+      }),
+    });
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (text) return text;
+    // Fallback: check if grounding returned anything
+    const groundingChunks =
+      data?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+    if (groundingChunks?.length > 0) {
+      return groundingChunks
+        .map((c: { web?: { snippet?: string } }) => c.web?.snippet)
+        .filter(Boolean)
+        .join(" ");
+    }
+    return "I was unable to process that request.";
+  } catch {
+    return "I was unable to process that request.";
+  }
+}
+
 // ─── DuckDuckGo JSON parser ────────────────────────────────────────────────
 function parseDuckDuckGoResponse(raw: string): string {
   if (!raw || !raw.trim())
     return "I could not find a specific answer for that. Try rephrasing your question.";
-  // Try JSON parse
   try {
     const data = JSON.parse(raw);
     const answer = data.AbstractText || data.Answer || data.Definition || "";
     if (answer.trim()) return answer.trim();
-    // If there are related topics, use the first one
     if (data.RelatedTopics?.length > 0) {
       const first = data.RelatedTopics[0];
       const text = first.Text || first.Topics?.[0]?.Text || "";
       if (text.trim()) return text.trim();
     }
-    // Heading as last resort
     if (data.Heading && data.AbstractSource) {
       return `${data.Heading}: No detailed summary found. Try searching for more specifics.`;
     }
     return "I could not find a specific answer for that. Try rephrasing your question.";
   } catch {
-    // Not JSON, return as-is if it looks like real text
     if (raw.length > 5 && !raw.startsWith("{")) return raw;
     return "I could not find a specific answer for that. Try rephrasing your question.";
   }
@@ -73,7 +114,6 @@ function loadVoices(): Promise<SpeechSynthesisVoice[]> {
       resolve(window.speechSynthesis.getVoices());
     };
     window.speechSynthesis.addEventListener("voiceschanged", onVoicesChanged);
-    // Fallback timeout in case event never fires
     setTimeout(() => {
       window.speechSynthesis.removeEventListener(
         "voiceschanged",
@@ -99,104 +139,289 @@ function pickJarvisVoice(
   return preferred.find(Boolean) ?? voices[0] ?? null;
 }
 
-// ─── Animated Orb ────────────────────────────────────────────────────────────
-function AnimatedOrb({ listening }: { listening: boolean }) {
+// ─── HUD Corner Brackets ────────────────────────────────────────────────────
+function HudCorners({
+  color = "oklch(0.78 0.15 75 / 0.7)",
+  size = 20,
+}: { color?: string; size?: number }) {
+  const style = (top: boolean, left: boolean) => ({
+    position: "absolute" as const,
+    width: size,
+    height: size,
+    pointerEvents: "none" as const,
+    [top ? "top" : "bottom"]: -1,
+    [left ? "left" : "right"]: -1,
+    borderTop: top ? `2px solid ${color}` : "none",
+    borderBottom: !top ? `2px solid ${color}` : "none",
+    borderLeft: left ? `2px solid ${color}` : "none",
+    borderRight: !left ? `2px solid ${color}` : "none",
+  });
+  return (
+    <>
+      <div style={style(true, true)} />
+      <div style={style(true, false)} />
+      <div style={style(false, true)} />
+      <div style={style(false, false)} />
+    </>
+  );
+}
+
+// ─── Arc Reactor Orb ─────────────────────────────────────────────────────────
+function ArcReactorOrb({ listening }: { listening: boolean }) {
+  const GOLD = "oklch(0.78 0.15 75)";
+  const RED = "oklch(0.48 0.22 25)";
+  const BLUE = "oklch(0.72 0.18 220)";
+
   return (
     <div
       className="relative flex items-center justify-center"
       style={{ width: 320, height: 320 }}
     >
-      {/* Outer ambient glow */}
+      {/* Ambient background glow */}
       <div
         className="absolute inset-0 rounded-full"
         style={{
-          background:
-            "radial-gradient(circle, oklch(0.45 0.2 255 / 0.15) 0%, transparent 70%)",
-          filter: "blur(20px)",
+          background: listening
+            ? `radial-gradient(circle, ${RED} 0%, transparent 65%)`
+            : "radial-gradient(circle, oklch(0.72 0.18 220 / 0.12) 0%, transparent 65%)",
+          filter: "blur(28px)",
+          opacity: listening ? 0.35 : 0.6,
+          transition: "all 0.6s ease",
         }}
       />
-      {/* Slowest spinning ring */}
+
+      {/* Outermost ring — slow spin, gold tick marks */}
       <div
-        className="absolute ring-spin-slow"
+        className="absolute arc-spin-slow"
         style={{ width: 300, height: 300 }}
       >
-        <div
-          className="w-full h-full rounded-full"
-          style={{
-            border: "1px solid oklch(0.82 0.12 183 / 0.2)",
-            boxShadow: "0 0 12px oklch(0.82 0.12 183 / 0.1)",
-          }}
-        />
+        <svg width="300" height="300" viewBox="0 0 300 300" aria-hidden="true">
+          <title>Outer reactor ring</title>
+          <circle
+            cx="150"
+            cy="150"
+            r="148"
+            fill="none"
+            stroke={"oklch(0.78 0.15 75 / 0.35)"}
+            strokeWidth="1"
+          />
+          {Array.from({ length: 24 }, (_, i) => {
+            const angle = (i * 360) / 24;
+            const rad = (angle * Math.PI) / 180;
+            const r1 = 144;
+            const r2 = i % 6 === 0 ? 134 : i % 3 === 0 ? 138 : 141;
+            return (
+              <line
+                key={angle}
+                x1={150 + r1 * Math.cos(rad)}
+                y1={150 + r1 * Math.sin(rad)}
+                x2={150 + r2 * Math.cos(rad)}
+                y2={150 + r2 * Math.sin(rad)}
+                stroke={`oklch(0.78 0.15 75 / ${i % 6 === 0 ? "0.8" : "0.4"})`}
+                strokeWidth={i % 6 === 0 ? "2" : "1"}
+              />
+            );
+          })}
+          {/* Triangle notches at cardinal points */}
+          {[0, 90, 180, 270].map((deg) => {
+            const rad = (deg * Math.PI) / 180;
+            const cx = 150 + 148 * Math.cos(rad);
+            const cy = 150 + 148 * Math.sin(rad);
+            return (
+              <polygon
+                key={deg}
+                points={`${cx},${cy - 5} ${cx - 4},${cy + 4} ${cx + 4},${cy + 4}`}
+                fill={"oklch(0.78 0.15 75 / 0.9)"}
+                transform={`rotate(${deg + 90}, ${cx}, ${cy})`}
+              />
+            );
+          })}
+        </svg>
       </div>
-      {/* Medium reverse ring */}
+
+      {/* Middle ring — reverse spin, hex tick marks */}
       <div
-        className="absolute ring-spin-reverse"
-        style={{ width: 260, height: 260 }}
+        className="absolute arc-spin-reverse"
+        style={{ width: 255, height: 255 }}
       >
-        <div
-          className="w-full h-full rounded-full"
-          style={{
-            border: "1px dashed oklch(0.75 0.14 210 / 0.25)",
-          }}
-        />
+        <svg width="255" height="255" viewBox="0 0 255 255" aria-hidden="true">
+          <title>Middle reactor ring</title>
+          <circle
+            cx="127.5"
+            cy="127.5"
+            r="125"
+            fill="none"
+            stroke={
+              listening
+                ? "oklch(0.48 0.22 25 / 0.6)"
+                : "oklch(0.78 0.15 75 / 0.25)"
+            }
+            strokeWidth="1.5"
+            strokeDasharray="6 4"
+            style={{ transition: "stroke 0.5s ease" }}
+          />
+          {Array.from({ length: 18 }, (_, i) => {
+            const angle = (i * 360) / 18;
+            const rad = (angle * Math.PI) / 180;
+            const r1 = 121;
+            const r2 = 115;
+            return (
+              <line
+                key={angle}
+                x1={127.5 + r1 * Math.cos(rad)}
+                y1={127.5 + r1 * Math.sin(rad)}
+                x2={127.5 + r2 * Math.cos(rad)}
+                y2={127.5 + r2 * Math.sin(rad)}
+                stroke={
+                  listening
+                    ? "oklch(0.48 0.22 25 / 0.7)"
+                    : "oklch(0.78 0.15 75 / 0.5)"
+                }
+                strokeWidth="1.5"
+              />
+            );
+          })}
+        </svg>
       </div>
-      {/* Fast spinning ring */}
-      <div className="absolute ring-spin" style={{ width: 220, height: 220 }}>
-        <div
-          className="w-full h-full rounded-full"
-          style={{
-            border: "1.5px solid oklch(0.82 0.12 183 / 0.4)",
-            boxShadow: "0 0 16px oklch(0.82 0.12 183 / 0.2) inset",
-          }}
-        />
+
+      {/* Inner ring — medium spin */}
+      <div
+        className="absolute arc-spin-medium"
+        style={{ width: 210, height: 210 }}
+      >
+        <svg width="210" height="210" viewBox="0 0 210 210" aria-hidden="true">
+          <title>Inner reactor ring</title>
+          <circle
+            cx="105"
+            cy="105"
+            r="103"
+            fill="none"
+            stroke={
+              listening
+                ? "oklch(0.48 0.22 25 / 0.5)"
+                : "oklch(0.78 0.15 75 / 0.45)"
+            }
+            strokeWidth="2"
+            style={{ transition: "stroke 0.5s ease" }}
+          />
+          {Array.from({ length: 12 }, (_, i) => {
+            const angle = (i * 360) / 12;
+            const rad = (angle * Math.PI) / 180;
+            const r1 = 99;
+            const _r2 = 92;
+            return (
+              <rect
+                key={angle}
+                x={105 + r1 * Math.cos(rad) - 3}
+                y={105 + r1 * Math.sin(rad) - 1.5}
+                width="6"
+                height="3"
+                fill={
+                  listening
+                    ? "oklch(0.48 0.22 25 / 0.8)"
+                    : "oklch(0.78 0.15 75 / 0.7)"
+                }
+                transform={`rotate(${angle}, ${105 + r1 * Math.cos(rad)}, ${105 + r1 * Math.sin(rad)})`}
+              />
+            );
+          })}
+        </svg>
       </div>
-      {/* Plasma core */}
-      <div className="absolute orb-pulse" style={{ width: 170, height: 170 }}>
+
+      {/* Innermost glowing ring */}
+      <div
+        className="absolute"
+        style={{
+          width: 168,
+          height: 168,
+          borderRadius: "50%",
+          border: `2px solid ${listening ? RED : GOLD}`,
+          boxShadow: listening
+            ? `0 0 20px ${RED}, 0 0 40px oklch(0.48 0.22 25 / 0.4)`
+            : "0 0 20px oklch(0.78 0.15 75 / 0.5), 0 0 40px oklch(0.78 0.15 75 / 0.25)",
+          transition: "border-color 0.5s ease, box-shadow 0.5s ease",
+        }}
+      />
+
+      {/* Arc reactor core glow */}
+      <div className="absolute arc-pulse" style={{ width: 140, height: 140 }}>
         <div
-          className="w-full h-full rounded-full"
+          className="w-full h-full rounded-full reactor-glow-anim"
           style={{
-            background:
-              "radial-gradient(circle at 40% 35%, oklch(0.82 0.12 183 / 0.9), oklch(0.65 0.18 225 / 0.8) 40%, oklch(0.45 0.2 255 / 0.7) 70%, oklch(0.12 0.018 228 / 0.4))",
-            boxShadow:
-              "0 0 30px oklch(0.82 0.12 183 / 0.5), 0 0 60px oklch(0.75 0.14 210 / 0.3), 0 0 100px oklch(0.45 0.2 255 / 0.2)",
+            background: listening
+              ? "radial-gradient(circle at 40% 35%, oklch(0.7 0.22 25 / 0.95), oklch(0.48 0.22 25 / 0.8) 40%, oklch(0.25 0.12 25 / 0.5) 70%, transparent)"
+              : `radial-gradient(circle at 40% 35%, oklch(0.95 0.05 220 / 0.95), ${BLUE} 35%, oklch(0.55 0.2 220 / 0.7) 60%, transparent)`,
+            boxShadow: listening
+              ? `0 0 30px ${RED}, 0 0 60px oklch(0.48 0.22 25 / 0.4)`
+              : `0 0 30px oklch(0.85 0.1 220 / 0.8), 0 0 60px ${BLUE}, 0 0 100px oklch(0.72 0.18 220 / 0.3)`,
             filter: "blur(1px)",
+            transition: "background 0.5s ease, box-shadow 0.5s ease",
           }}
         />
       </div>
-      {/* Inner plasma drift */}
+
+      {/* Center bright core */}
       <div
-        className="absolute plasma-drift"
-        style={{ width: 100, height: 100, top: "50%", left: "50%" }}
+        className="relative z-10 flex items-center justify-center"
+        style={{
+          width: 60,
+          height: 60,
+          borderRadius: "50%",
+          background: listening
+            ? "radial-gradient(circle, oklch(0.9 0.15 25), oklch(0.6 0.22 25))"
+            : `radial-gradient(circle, white, ${BLUE})`,
+          boxShadow: listening
+            ? `0 0 20px ${RED}, 0 0 40px oklch(0.48 0.22 25 / 0.6)`
+            : `0 0 20px white, 0 0 40px ${BLUE}`,
+          transition: "all 0.5s ease",
+        }}
       >
-        <div
-          className="w-full h-full rounded-full"
+        <Zap
+          size={24}
           style={{
-            background:
-              "radial-gradient(circle, oklch(0.9 0.1 183 / 0.8), oklch(0.82 0.12 183 / 0.3) 50%, transparent)",
-            filter: "blur(4px)",
+            color: listening ? "oklch(0.95 0.04 25)" : "oklch(0.05 0.01 220)",
           }}
         />
       </div>
-      {/* Listening pulse overlay */}
+
+      {/* Red pulse rings when listening */}
       <AnimatePresence>
         {listening && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1.2 }}
-            exit={{ opacity: 0 }}
-            transition={{
-              repeat: Number.POSITIVE_INFINITY,
-              duration: 1,
-              repeatType: "reverse",
-            }}
-            className="absolute rounded-full"
-            style={{
-              width: 190,
-              height: 190,
-              border: "2px solid oklch(0.82 0.12 183 / 0.8)",
-              boxShadow: "0 0 30px oklch(0.82 0.12 183 / 0.6)",
-            }}
-          />
+          <>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1.15 }}
+              exit={{ opacity: 0 }}
+              transition={{
+                repeat: Number.POSITIVE_INFINITY,
+                duration: 1,
+                repeatType: "reverse",
+              }}
+              className="absolute rounded-full pointer-events-none"
+              style={{
+                width: 190,
+                height: 190,
+                border: "2px solid oklch(0.48 0.22 25 / 0.7)",
+                boxShadow: "0 0 25px oklch(0.48 0.22 25 / 0.5)",
+              }}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 1 }}
+              animate={{ opacity: 0.4, scale: 1.35 }}
+              exit={{ opacity: 0 }}
+              transition={{
+                repeat: Number.POSITIVE_INFINITY,
+                duration: 1.4,
+                repeatType: "reverse",
+              }}
+              className="absolute rounded-full pointer-events-none"
+              style={{
+                width: 210,
+                height: 210,
+                border: "1px solid oklch(0.48 0.22 25 / 0.4)",
+              }}
+            />
+          </>
         )}
       </AnimatePresence>
     </div>
@@ -223,8 +448,8 @@ function Waveform({ listening }: { listening: boolean }) {
               minHeight: 3,
               maxHeight: 40,
               background: listening
-                ? `oklch(${0.82 - (i % 3) * 0.05} ${0.12 + (i % 4) * 0.02} ${183 + (i % 5) * 5})`
-                : "oklch(0.25 0.025 228)",
+                ? `oklch(${0.78 - (i % 3) * 0.05} ${0.15 + (i % 4) * 0.02} ${75 + (i % 5) * 3})`
+                : "oklch(0.3 0.1 25)",
               animation: listening
                 ? `wave-bar ${0.4 + (i % 7) * 0.08}s ${i * 0.03}s ease-in-out infinite alternate`
                 : "none",
@@ -249,38 +474,39 @@ function ChatTranscriptPanel({ messages }: { messages: ChatMessage[] }) {
   return (
     <div
       data-ocid="chat.panel"
-      className="glass-card rounded-2xl p-4 w-full flex flex-col"
-      style={{ height: 320 }}
+      className="iron-panel rounded-lg p-4 w-full flex flex-col hud-brackets"
+      style={{ height: 420, position: "relative" }}
     >
       <div className="flex items-center gap-2 mb-3">
-        <MessageSquare size={14} style={{ color: "oklch(0.82 0.12 183)" }} />
+        <MessageSquare size={14} style={{ color: "oklch(0.78 0.15 75)" }} />
         <span
-          className="text-xs font-semibold tracking-widest uppercase"
+          className="text-xs font-semibold tracking-widest uppercase tech-font"
           style={{
-            color: "oklch(0.82 0.12 183)",
-            textShadow: "0 0 8px oklch(0.82 0.12 183 / 0.6)",
+            color: "oklch(0.78 0.15 75)",
+            textShadow: "0 0 8px oklch(0.78 0.15 75 / 0.6)",
           }}
         >
           Chat Transcript
         </span>
         <span
-          className="ml-auto text-xs px-2 py-0.5 rounded-full"
+          className="ml-auto text-xs px-2 py-0.5 rounded tech-font"
           style={{
-            background: "oklch(0.82 0.12 183 / 0.15)",
-            color: "oklch(0.82 0.12 183)",
+            background: "oklch(0.78 0.15 75 / 0.12)",
+            color: "oklch(0.78 0.15 75)",
+            border: "1px solid oklch(0.78 0.15 75 / 0.3)",
           }}
         >
           {messages.length}
         </span>
       </div>
-      <ScrollArea className="flex-1 pr-1">
+      <ScrollArea className="pr-1" style={{ height: "calc(100% - 48px)" }}>
         <div className="space-y-3">
           {messages.length === 0 ? (
             <p
-              className="text-xs text-center py-6"
-              style={{ color: "oklch(0.58 0.02 228)" }}
+              className="text-xs text-center py-6 tech-font tracking-widest"
+              style={{ color: "oklch(0.5 0.04 75)" }}
             >
-              Waiting for input...
+              AWAITING INPUT...
             </p>
           ) : (
             messages.map((msg, idx) => (
@@ -292,27 +518,31 @@ function ChatTranscriptPanel({ messages }: { messages: ChatMessage[] }) {
                 data-ocid={`chat.item.${idx + 1}`}
               >
                 <span
-                  className="text-[10px] font-medium tracking-wider uppercase"
+                  className="text-[10px] font-medium tracking-wider uppercase tech-font"
                   style={{
                     color:
                       msg.role === "user"
-                        ? "oklch(0.65 0.18 225)"
-                        : "oklch(0.82 0.12 183)",
+                        ? "oklch(0.72 0.18 220)"
+                        : "oklch(0.78 0.15 75)",
                   }}
                 >
-                  {msg.role === "user" ? "You" : "JARVIS"}
+                  {msg.role === "user" ? "YOU" : "J.A.R.V.I.S."}
                 </span>
                 <div
-                  className="text-xs px-3 py-2 rounded-xl max-w-[90%]"
+                  className="text-xs px-3 py-2 rounded max-w-[90%]"
                   style={{
                     background:
                       msg.role === "user"
-                        ? "oklch(0.45 0.2 255 / 0.2)"
-                        : "oklch(0.82 0.12 183 / 0.1)",
-                    border: `1px solid ${msg.role === "user" ? "oklch(0.65 0.18 225 / 0.3)" : "oklch(0.82 0.12 183 / 0.25)"}`,
+                        ? "oklch(0.48 0.22 25 / 0.15)"
+                        : "oklch(0.78 0.15 75 / 0.08)",
+                    border: `1px solid ${
+                      msg.role === "user"
+                        ? "oklch(0.48 0.22 25 / 0.4)"
+                        : "oklch(0.78 0.15 75 / 0.25)"
+                    }`,
                     color: msg.pending
-                      ? "oklch(0.58 0.02 228)"
-                      : "oklch(0.94 0.01 230)",
+                      ? "oklch(0.5 0.04 75)"
+                      : "oklch(0.92 0.04 75)",
                     fontStyle: msg.pending ? "italic" : "normal",
                   }}
                 >
@@ -354,33 +584,33 @@ function SystemStatusPanel({
     {
       label: "CONNECTION",
       value: connected ? "ONLINE" : "OFFLINE",
-      color: connected ? "oklch(0.75 0.18 145)" : "oklch(0.65 0.25 25)",
+      color: connected ? "oklch(0.7 0.18 145)" : "oklch(0.65 0.25 25)",
       dot: true,
     },
     {
       label: "QUERIES",
       value: String(messageCount),
-      color: "oklch(0.82 0.12 183)",
+      color: "oklch(0.78 0.15 75)",
     },
-    { label: "SYS TIME", value: currentTime, color: "oklch(0.75 0.14 210)" },
-    { label: "UPTIME", value: uptime, color: "oklch(0.65 0.18 225)" },
-    { label: "STATUS", value: "OPERATIONAL", color: "oklch(0.75 0.18 145)" },
-    { label: "VERSION", value: "v2.1.0", color: "oklch(0.58 0.02 228)" },
+    { label: "SYS TIME", value: currentTime, color: "oklch(0.72 0.18 220)" },
+    { label: "UPTIME", value: uptime, color: "oklch(0.65 0.18 220)" },
+    { label: "STATUS", value: "OPERATIONAL", color: "oklch(0.7 0.18 145)" },
+    { label: "POWER", value: "100%", color: "oklch(0.78 0.15 75)" },
   ];
 
   return (
     <div
       data-ocid="hud.panel"
-      className="glass-card rounded-2xl p-4 w-full"
-      style={{ height: 320 }}
+      className="iron-panel rounded-lg p-4 w-full hud-brackets"
+      style={{ height: 320, position: "relative" }}
     >
       <div className="flex items-center gap-2 mb-4">
-        <Brain size={14} style={{ color: "oklch(0.75 0.14 210)" }} />
+        <Brain size={14} style={{ color: "oklch(0.72 0.18 220)" }} />
         <span
-          className="text-xs font-semibold tracking-widest uppercase"
+          className="text-xs font-semibold tracking-widest uppercase tech-font"
           style={{
-            color: "oklch(0.75 0.14 210)",
-            textShadow: "0 0 8px oklch(0.75 0.14 210 / 0.6)",
+            color: "oklch(0.72 0.18 220)",
+            textShadow: "0 0 8px oklch(0.72 0.18 220 / 0.6)",
           }}
         >
           System Status
@@ -390,15 +620,15 @@ function SystemStatusPanel({
         {metrics.map((m) => (
           <div key={m.label} className="flex items-center justify-between">
             <span
-              className="text-[10px] tracking-widest uppercase"
-              style={{ color: "oklch(0.58 0.02 228)" }}
+              className="text-[10px] tracking-widest uppercase tech-font"
+              style={{ color: "oklch(0.5 0.04 75)" }}
             >
               {m.label}
             </span>
             <div className="flex items-center gap-1.5">
               {m.dot && (
                 <span
-                  className="w-1.5 h-1.5 rounded-full"
+                  className="w-1.5 h-1.5 rounded-full hud-blink"
                   style={{
                     background: m.color,
                     boxShadow: `0 0 6px ${m.color}`,
@@ -406,7 +636,7 @@ function SystemStatusPanel({
                 />
               )}
               <span
-                className="text-xs font-semibold font-mono"
+                className="text-xs font-semibold tech-font"
                 style={{ color: m.color, textShadow: `0 0 8px ${m.color}60` }}
               >
                 {m.value}
@@ -416,24 +646,304 @@ function SystemStatusPanel({
         ))}
       </div>
       <div
-        className="mt-4 pt-3 rounded-lg text-center text-[10px] tracking-widest uppercase"
+        className="mt-4 pt-3 rounded text-center text-[10px] tracking-widest uppercase tech-font"
         style={{
-          border: "1px solid oklch(0.82 0.12 183 / 0.2)",
-          background: "oklch(0.82 0.12 183 / 0.05)",
-          color: "oklch(0.82 0.12 183 / 0.7)",
+          border: "1px solid oklch(0.78 0.15 75 / 0.2)",
+          background: "oklch(0.78 0.15 75 / 0.04)",
+          color: "oklch(0.78 0.15 75 / 0.7)",
           padding: "8px",
         }}
       >
-        JARVIS AI ● Internet Connected
+        MARK XLVII ● ONLINE ● YAC INDUSTRIES
       </div>
+    </div>
+  );
+}
+
+// ─── Login Screen ─────────────────────────────────────────────────────────────
+function LoginScreen({
+  onLogin,
+  isLoggingIn,
+}: {
+  onLogin: () => void;
+  isLoggingIn: boolean;
+}) {
+  return (
+    <div
+      className="min-h-screen flex items-center justify-center relative overflow-hidden"
+      style={{ background: "oklch(0.05 0.01 220)" }}
+    >
+      {/* Scanline overlay */}
+      <div className="scanline-overlay" />
+      <div className="scanline-sweep" />
+
+      {/* Hex grid background */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='52' viewBox='0 0 60 52'%3E%3Cpolygon points='30,2 58,16 58,36 30,50 2,36 2,16' fill='none' stroke='oklch(0.78 0.15 75 / 0.06)' stroke-width='0.5'/%3E%3C/svg%3E")`,
+          backgroundSize: "60px 52px",
+          opacity: 0.8,
+        }}
+      />
+
+      {/* Arc reactor ambient glow */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(ellipse 60% 60% at 50% 50%, oklch(0.72 0.18 220 / 0.1), transparent 70%)",
+        }}
+      />
+
+      {/* Screen corner HUD brackets */}
+      {[
+        { cls: "top-6 left-6" },
+        { cls: "top-6 right-6" },
+        { cls: "bottom-6 left-6" },
+        { cls: "bottom-6 right-6" },
+      ].map(({ cls }, i) => (
+        <div
+          key={cls}
+          className={`absolute ${cls} w-10 h-10 pointer-events-none`}
+          style={{
+            borderTop: i < 2 ? "2px solid oklch(0.78 0.15 75 / 0.5)" : "none",
+            borderBottom:
+              i >= 2 ? "2px solid oklch(0.78 0.15 75 / 0.5)" : "none",
+            borderLeft:
+              i % 2 === 0 ? "2px solid oklch(0.78 0.15 75 / 0.5)" : "none",
+            borderRight:
+              i % 2 === 1 ? "2px solid oklch(0.78 0.15 75 / 0.5)" : "none",
+          }}
+        />
+      ))}
+
+      <motion.div
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.8 }}
+        className="flex flex-col items-center gap-8 px-8 text-center relative"
+        style={{ maxWidth: 480 }}
+      >
+        {/* Arc reactor login orb */}
+        <div
+          className="relative flex items-center justify-center"
+          style={{ width: 200, height: 200 }}
+        >
+          {/* Outer rings */}
+          <div
+            className="absolute arc-spin-slow"
+            style={{ width: 190, height: 190 }}
+          >
+            <svg
+              width="190"
+              height="190"
+              viewBox="0 0 190 190"
+              aria-hidden="true"
+            >
+              <title>Login reactor ring</title>
+              <circle
+                cx="95"
+                cy="95"
+                r="93"
+                fill="none"
+                stroke="oklch(0.78 0.15 75 / 0.3)"
+                strokeWidth="1"
+              />
+              {Array.from({ length: 16 }, (_, i) => {
+                const angle = (i * 360) / 16;
+                const rad = (angle * Math.PI) / 180;
+                return (
+                  <line
+                    key={angle}
+                    x1={95 + 89 * Math.cos(rad)}
+                    y1={95 + 89 * Math.sin(rad)}
+                    x2={95 + 83 * Math.cos(rad)}
+                    y2={95 + 83 * Math.sin(rad)}
+                    stroke={`oklch(0.78 0.15 75 / ${i % 4 === 0 ? "0.9" : "0.4"})`}
+                    strokeWidth="1.5"
+                  />
+                );
+              })}
+            </svg>
+          </div>
+          <div
+            className="absolute arc-spin-reverse"
+            style={{ width: 155, height: 155 }}
+          >
+            <div
+              className="w-full h-full rounded-full"
+              style={{
+                border: "1px dashed oklch(0.72 0.18 220 / 0.4)",
+                boxShadow: "0 0 10px oklch(0.72 0.18 220 / 0.15)",
+              }}
+            />
+          </div>
+          {/* Core glow */}
+          <div
+            className="absolute arc-pulse"
+            style={{ width: 110, height: 110 }}
+          >
+            <div
+              className="w-full h-full rounded-full reactor-glow-anim"
+              style={{
+                background:
+                  "radial-gradient(circle at 40% 35%, white 0%, oklch(0.72 0.18 220) 35%, oklch(0.4 0.18 220 / 0.7) 65%, transparent)",
+                boxShadow:
+                  "0 0 30px white, 0 0 60px oklch(0.72 0.18 220), 0 0 100px oklch(0.72 0.18 220 / 0.5)",
+                filter: "blur(1px)",
+              }}
+            />
+          </div>
+          <div
+            className="relative z-10 flex items-center justify-center"
+            style={{
+              width: 50,
+              height: 50,
+              borderRadius: "50%",
+              background:
+                "radial-gradient(circle, white, oklch(0.72 0.18 220))",
+              boxShadow: "0 0 20px white, 0 0 40px oklch(0.72 0.18 220)",
+            }}
+          >
+            <Zap size={22} style={{ color: "oklch(0.05 0.01 220)" }} />
+          </div>
+        </div>
+
+        {/* YAC Industries badge */}
+        <div className="flex flex-col gap-1">
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.2 }}
+            className="text-xs tracking-[0.4em] uppercase tech-font"
+            style={{ color: "oklch(0.55 0.08 75)" }}
+          >
+            YAC INDUSTRIES
+          </motion.p>
+          <motion.h1
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.35 }}
+            className="text-5xl font-black tracking-[0.25em] uppercase"
+            style={{
+              fontFamily: "'Share Tech Mono', monospace",
+              color: "oklch(0.78 0.15 75)",
+              textShadow:
+                "0 0 20px oklch(0.78 0.15 75 / 0.7), 0 0 50px oklch(0.78 0.15 75 / 0.4)",
+            }}
+          >
+            J.A.R.V.I.S.
+          </motion.h1>
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.5 }}
+            className="text-[11px] tracking-[0.2em] uppercase tech-font"
+            style={{ color: "oklch(0.5 0.06 75)" }}
+          >
+            Just A Rather Very Intelligent System
+          </motion.p>
+        </div>
+
+        {/* Divider */}
+        <div className="w-full flex items-center gap-3">
+          <div
+            className="flex-1 h-px"
+            style={{ background: "oklch(0.78 0.15 75 / 0.25)" }}
+          />
+          <span
+            className="text-[10px] tracking-widest uppercase tech-font"
+            style={{ color: "oklch(0.45 0.04 75)" }}
+          >
+            SYSTEM ACCESS REQUIRED
+          </span>
+          <div
+            className="flex-1 h-px"
+            style={{ background: "oklch(0.78 0.15 75 / 0.25)" }}
+          />
+        </div>
+
+        {/* Login button */}
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.65 }}
+          className="w-full"
+          style={{ position: "relative" }}
+        >
+          <HudCorners size={16} color="oklch(0.78 0.15 75 / 0.7)" />
+          <button
+            type="button"
+            data-ocid="login.primary_button"
+            onClick={onLogin}
+            disabled={isLoggingIn}
+            className="w-full py-3 px-8 text-sm font-semibold tracking-widest uppercase transition-all disabled:opacity-60 disabled:cursor-not-allowed tech-font"
+            style={{
+              background: isLoggingIn
+                ? "oklch(0.78 0.15 75 / 0.08)"
+                : "oklch(0.78 0.15 75 / 0.1)",
+              border: "1px solid oklch(0.78 0.15 75 / 0.55)",
+              color: "oklch(0.78 0.15 75)",
+              boxShadow: isLoggingIn
+                ? "none"
+                : "0 0 20px oklch(0.78 0.15 75 / 0.2), inset 0 0 20px oklch(0.78 0.15 75 / 0.05)",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background =
+                "oklch(0.48 0.22 25 / 0.2)";
+              (e.currentTarget as HTMLElement).style.borderColor =
+                "oklch(0.48 0.22 25 / 0.8)";
+              (e.currentTarget as HTMLElement).style.color =
+                "oklch(0.72 0.22 25)";
+              (e.currentTarget as HTMLElement).style.boxShadow =
+                "0 0 20px oklch(0.48 0.22 25 / 0.4)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background =
+                "oklch(0.78 0.15 75 / 0.1)";
+              (e.currentTarget as HTMLElement).style.borderColor =
+                "oklch(0.78 0.15 75 / 0.55)";
+              (e.currentTarget as HTMLElement).style.color =
+                "oklch(0.78 0.15 75)";
+              (e.currentTarget as HTMLElement).style.boxShadow =
+                "0 0 20px oklch(0.78 0.15 75 / 0.2)";
+            }}
+          >
+            {isLoggingIn ? (
+              <span className="flex items-center justify-center gap-2">
+                <span
+                  className="w-4 h-4 rounded-full border-2 animate-spin"
+                  style={{
+                    borderColor: "oklch(0.78 0.15 75 / 0.3)",
+                    borderTopColor: "oklch(0.78 0.15 75)",
+                  }}
+                />
+                AUTHENTICATING...
+              </span>
+            ) : (
+              "INITIATE SYSTEM ACCESS"
+            )}
+          </button>
+        </motion.div>
+
+        <p
+          className="text-[11px] tech-font"
+          style={{ color: "oklch(0.38 0.04 75)" }}
+        >
+          SECURED BY INTERNET IDENTITY — BIOMETRIC AUTHENTICATION
+        </p>
+      </motion.div>
     </div>
   );
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const { actor } = useActor();
-  const queryClient = useQueryClient();
+  const { identity, login, clear, isInitializing, isLoggingIn } =
+    useInternetIdentity();
+  const { actor: _actor } = useActor();
+  const _queryClient = useQueryClient();
   const { data: remoteMessages = [] } = useGetAllMessages();
   const { data: connected = false } = useIsConnected();
 
@@ -445,6 +955,10 @@ export default function App() {
   const [uptime, setUptime] = useState("00:00:00");
 
   const recognitionRef = useRef<any>(null);
+  const [wakeWordActive, setWakeWordActive] = useState(false);
+  const [wakeWordDetected, setWakeWordDetected] = useState(false);
+  const wakeListenerRef = useRef<any>(null);
+  const wakeWordActiveRef = useRef(false);
 
   // Uptime counter
   useEffect(() => {
@@ -494,51 +1008,9 @@ export default function App() {
     window.speechSynthesis.speak(utt);
   }, []);
 
-  const pollForResponse = useCallback(
-    async (id: bigint, pendingId: string) => {
-      if (!actor) return;
-      const maxAttempts = 30;
-      for (let i = 0; i < maxAttempts; i++) {
-        await new Promise((r) => setTimeout(r, 1000));
-        try {
-          const entry: ConversationEntry = await actor.getMessage(id);
-          if (entry.response.content) {
-            const responseMsg: ChatMessage = {
-              id: `jarvis-${id}`,
-              role: "assistant",
-              content: parseDuckDuckGoResponse(entry.response.content),
-              timestamp: Date.now(),
-            };
-            setChatMessages((prev) =>
-              prev.filter((m) => m.id !== pendingId).concat(responseMsg),
-            );
-            speakText(parseDuckDuckGoResponse(entry.response.content));
-            queryClient.invalidateQueries({ queryKey: ["messages"] });
-            return;
-          }
-        } catch {
-          // continue polling
-        }
-      }
-      // Timeout
-      setChatMessages((prev) =>
-        prev.map((m) =>
-          m.id === pendingId
-            ? {
-                ...m,
-                content: "[No response received. Please try again.]",
-                pending: false,
-              }
-            : m,
-        ),
-      );
-    },
-    [actor, speakText, queryClient],
-  );
-
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!text.trim() || !actor || isSending) return;
+      if (!text.trim() || isSending) return;
       setIsSending(true);
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
@@ -557,8 +1029,17 @@ export default function App() {
       setChatMessages((prev) => [...prev, userMsg, pendingMsg]);
       setTextInput("");
       try {
-        const msgId = await actor.sendMessage(text.trim());
-        await pollForResponse(msgId, pendingId);
+        const response = await callGeminiAPI(text.trim());
+        const responseMsg: ChatMessage = {
+          id: `jarvis-${Date.now()}`,
+          role: "assistant",
+          content: response,
+          timestamp: Date.now(),
+        };
+        setChatMessages((prev) =>
+          prev.filter((m) => m.id !== pendingId).concat(responseMsg),
+        );
+        speakText(response);
       } catch (_err) {
         setChatMessages((prev) =>
           prev.map((m) =>
@@ -566,7 +1047,7 @@ export default function App() {
               ? {
                   ...m,
                   content:
-                    "[Error communicating with JARVIS. Please try again.]",
+                    "[Error communicating with J.A.R.V.I.S. Please try again.]",
                   pending: false,
                 }
               : m,
@@ -576,7 +1057,7 @@ export default function App() {
         setIsSending(false);
       }
     },
-    [actor, isSending, pollForResponse],
+    [isSending, speakText],
   );
 
   const toggleListening = useCallback(() => {
@@ -603,12 +1084,111 @@ export default function App() {
       setListening(false);
       sendMessage(transcript);
     };
-    recognition.onerror = () => setListening(false);
-    recognition.onend = () => setListening(false);
+    recognition.onerror = () => {
+      setListening(false);
+      // Restart wake listener if active
+      if (wakeWordActiveRef.current) {
+        setTimeout(() => startWakeListener(), 500);
+      }
+    };
+    recognition.onend = () => {
+      setListening(false);
+      // Restart wake listener if active
+      if (wakeWordActiveRef.current) {
+        setTimeout(() => startWakeListener(), 500);
+      }
+    };
     recognitionRef.current = recognition;
     recognition.start();
     setListening(true);
   }, [listening, sendMessage]);
+
+  const startWakeListener = useCallback(() => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition || !wakeWordActiveRef.current) return;
+    try {
+      const wakeRec = new SpeechRecognition();
+      wakeRec.lang = "en-US";
+      wakeRec.continuous = true;
+      wakeRec.interimResults = true;
+      wakeRec.maxAlternatives = 1;
+      wakeRec.onresult = (event: any) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript.toLowerCase();
+          if (transcript.includes("jarvis")) {
+            // Wake word detected!
+            wakeRec.stop();
+            setWakeWordDetected(true);
+            setTimeout(() => setWakeWordDetected(false), 2000);
+            // Start command recognition
+            const SR2 =
+              (window as any).SpeechRecognition ||
+              (window as any).webkitSpeechRecognition;
+            const cmdRec = new SR2();
+            cmdRec.lang = "en-US";
+            cmdRec.interimResults = false;
+            cmdRec.maxAlternatives = 1;
+            cmdRec.onresult = (ev: any) => {
+              const cmd = ev.results[0][0].transcript;
+              setListening(false);
+              sendMessage(cmd);
+            };
+            cmdRec.onerror = () => {
+              setListening(false);
+              if (wakeWordActiveRef.current)
+                setTimeout(() => startWakeListener(), 500);
+            };
+            cmdRec.onend = () => {
+              setListening(false);
+              if (wakeWordActiveRef.current)
+                setTimeout(() => startWakeListener(), 500);
+            };
+            recognitionRef.current = cmdRec;
+            setListening(true);
+            cmdRec.start();
+            break;
+          }
+        }
+      };
+      wakeRec.onerror = () => {
+        if (wakeWordActiveRef.current)
+          setTimeout(() => startWakeListener(), 1000);
+      };
+      wakeRec.onend = () => {
+        if (wakeWordActiveRef.current && !recognitionRef.current) {
+          setTimeout(() => startWakeListener(), 500);
+        }
+      };
+      wakeListenerRef.current = wakeRec;
+      wakeRec.start();
+    } catch (_e) {
+      // ignore
+    }
+  }, [sendMessage]);
+
+  const toggleWakeWord = useCallback(() => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert(
+        "Speech recognition is not supported in your browser. Please use Chrome.",
+      );
+      return;
+    }
+    if (wakeWordActive) {
+      wakeWordActiveRef.current = false;
+      setWakeWordActive(false);
+      wakeListenerRef.current?.stop();
+      wakeListenerRef.current = null;
+    } else {
+      wakeWordActiveRef.current = true;
+      setWakeWordActive(true);
+      startWakeListener();
+    }
+  }, [wakeWordActive, startWakeListener]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") sendMessage(textInput);
@@ -617,131 +1197,202 @@ export default function App() {
   const features = [
     {
       icon: <Mic size={22} />,
-      title: "Voice Control",
-      desc: "Speak naturally and JARVIS understands your commands with high-accuracy speech recognition powered by the Web Speech API.",
+      title: "Voice Command",
+      desc: "Speak naturally and J.A.R.V.I.S. processes your commands with high-accuracy speech recognition. No keyboard required.",
     },
     {
       icon: <Globe size={22} />,
-      title: "Internet Connected",
-      desc: "JARVIS has real-time access to the internet, pulling live data, news, weather, and information to give you accurate answers.",
+      title: "Internet Access",
+      desc: "J.A.R.V.I.S. has real-time access to the global network, pulling live data, news, and information for accurate responses.",
     },
     {
       icon: <Sparkles size={22} />,
-      title: "Smart Responses",
-      desc: "Powered by advanced AI, JARVIS reasons through complex queries and delivers context-aware, intelligent responses instantly.",
+      title: "AI Processing",
+      desc: "Advanced AI reasoning delivers context-aware, intelligent responses instantly. Powered by the YAC Intelligence Framework.",
     },
   ];
 
   const steps = [
     {
       num: "01",
-      title: "Speak",
-      desc: "Activate the microphone or type your query. JARVIS listens with precision and clarity.",
+      title: "Initiate",
+      desc: "Activate the microphone or type your query. J.A.R.V.I.S. listens with precision and clarity.",
     },
     {
       num: "02",
       title: "Process",
-      desc: "Your input is analyzed and sent through JARVIS's AI pipeline with live internet context.",
+      desc: "Your input is analyzed through J.A.R.V.I.S.'s AI pipeline with live internet context integration.",
     },
     {
       num: "03",
-      title: "Respond",
-      desc: "JARVIS delivers an intelligent, spoken response and displays it in the transcript panel.",
+      title: "Execute",
+      desc: "J.A.R.V.I.S. delivers an intelligent spoken response and displays the transcript in real-time.",
     },
   ];
+
+  // ─── Auth gates ──────────────────────────────────────────────────────────
+  if (isInitializing) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: "oklch(0.05 0.01 220)" }}
+      >
+        <div className="flex flex-col items-center gap-4">
+          <div
+            className="w-10 h-10 rounded-full border-2 animate-spin"
+            style={{
+              borderColor: "oklch(0.78 0.15 75 / 0.2)",
+              borderTopColor: "oklch(0.78 0.15 75)",
+            }}
+          />
+          <span
+            className="text-xs tracking-widest uppercase tech-font"
+            style={{ color: "oklch(0.5 0.08 75)" }}
+          >
+            INITIALIZING SYSTEMS...
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!identity) {
+    return <LoginScreen onLogin={login} isLoggingIn={isLoggingIn} />;
+  }
 
   return (
     <div
       className="min-h-screen flex flex-col"
-      style={{
-        background:
-          "linear-gradient(180deg, oklch(0.07 0.01 230) 0%, oklch(0.085 0.012 228) 100%)",
-      }}
+      style={{ background: "oklch(0.05 0.01 220)" }}
     >
+      {/* Scanline overlay */}
+      <div className="scanline-overlay" />
+      <div className="scanline-sweep" />
+
+      {/* Hex grid background */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='52' viewBox='0 0 60 52'%3E%3Cpolygon points='30,2 58,16 58,36 30,50 2,36 2,16' fill='none' stroke='oklch(0.78 0.15 75 / 0.04)' stroke-width='0.5'/%3E%3C/svg%3E")`,
+          backgroundSize: "60px 52px",
+          zIndex: 0,
+        }}
+      />
+
       {/* ─── Header ─────────────────────────────────────────────────────── */}
       <header
-        className="sticky top-0 z-50 flex items-center justify-between px-6 py-4"
+        className="sticky top-0 z-50 flex items-center justify-between px-6 py-3"
         style={{
-          borderBottom: "1px solid oklch(0.25 0.025 228 / 0.5)",
-          background: "oklch(0.07 0.01 230 / 0.9)",
+          borderBottom: "1px solid oklch(0.78 0.15 75 / 0.25)",
+          background: "oklch(0.05 0.01 220 / 0.95)",
           backdropFilter: "blur(16px)",
+          boxShadow: "0 1px 30px oklch(0.78 0.15 75 / 0.08)",
         }}
       >
         {/* Brand */}
         <div className="flex items-center gap-3">
           <div
-            className="flex items-center justify-center w-9 h-9 rounded-lg"
+            className="flex items-center justify-center w-9 h-9"
             style={{
-              background: "oklch(0.82 0.12 183 / 0.15)",
-              border: "1px solid oklch(0.82 0.12 183 / 0.4)",
-              boxShadow: "0 0 12px oklch(0.82 0.12 183 / 0.3)",
+              background: "oklch(0.78 0.15 75 / 0.12)",
+              border: "1px solid oklch(0.78 0.15 75 / 0.5)",
+              boxShadow: "0 0 16px oklch(0.78 0.15 75 / 0.35)",
+              clipPath:
+                "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
             }}
           >
-            <Zap size={18} style={{ color: "oklch(0.82 0.12 183)" }} />
+            <Zap size={16} style={{ color: "oklch(0.78 0.15 75)" }} />
           </div>
-          <span
-            className="text-xl font-bold tracking-widest uppercase"
-            style={{
-              color: "oklch(0.82 0.12 183)",
-              textShadow: "0 0 12px oklch(0.82 0.12 183 / 0.5)",
-            }}
-          >
-            JARVIS
-          </span>
-        </div>
-        {/* Nav */}
-        <nav
-          className="hidden md:flex items-center gap-1 px-4 py-2 rounded-full"
-          style={{
-            background: "oklch(0.12 0.018 228 / 0.8)",
-            border: "1px solid oklch(0.25 0.025 228)",
-          }}
-        >
-          {["Features", "How It Works", "About"].map((link) => (
-            <a
-              key={link}
-              href={`#${link.toLowerCase().replace(" ", "-")}`}
-              data-ocid="nav.link"
-              className="px-4 py-1.5 text-sm rounded-full transition-colors"
-              style={{ color: "oklch(0.72 0.02 228)" }}
-              onMouseEnter={(e) => {
-                (e.target as HTMLElement).style.color = "oklch(0.82 0.12 183)";
-              }}
-              onMouseLeave={(e) => {
-                (e.target as HTMLElement).style.color = "oklch(0.72 0.02 228)";
+          <div className="flex flex-col leading-none">
+            <span
+              className="text-lg font-black tracking-[0.2em] uppercase tech-font"
+              style={{
+                color: "oklch(0.78 0.15 75)",
+                textShadow: "0 0 16px oklch(0.78 0.15 75 / 0.6)",
               }}
             >
-              {link}
-            </a>
-          ))}
-        </nav>
+              J.A.R.V.I.S.
+            </span>
+            <span
+              className="text-[9px] tracking-[0.3em] uppercase tech-font"
+              style={{ color: "oklch(0.48 0.06 75)" }}
+            >
+              YAC INDUSTRIES
+            </span>
+          </div>
+        </div>
+
+        {/* Status bar */}
+        <div
+          className="hidden md:flex items-center gap-3 px-4 py-2 tech-font"
+          style={{
+            background: "oklch(0.09 0.015 75 / 0.7)",
+            border: "1px solid oklch(0.78 0.15 75 / 0.2)",
+          }}
+        >
+          <span
+            className="text-[10px] tracking-widest uppercase"
+            style={{ color: "oklch(0.5 0.04 75)" }}
+          >
+            MARK XLVII
+          </span>
+          <span style={{ color: "oklch(0.3 0.05 75)" }}>•</span>
+          <span
+            className="text-[10px] tracking-widest uppercase hud-blink"
+            style={{ color: "oklch(0.7 0.18 145)" }}
+          >
+            ONLINE
+          </span>
+          <span style={{ color: "oklch(0.3 0.05 75)" }}>•</span>
+          <span
+            className="text-[10px] tracking-widest uppercase"
+            style={{ color: "oklch(0.78 0.15 75)" }}
+          >
+            POWER: 100%
+          </span>
+        </div>
+
         {/* CTAs */}
         <div className="flex items-center gap-3">
           <div
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full"
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 tech-font"
             style={{
               background: connected
-                ? "oklch(0.3 0.1 145 / 0.2)"
-                : "oklch(0.3 0.15 25 / 0.2)",
-              border: `1px solid ${connected ? "oklch(0.55 0.15 145 / 0.5)" : "oklch(0.55 0.2 25 / 0.5)"}`,
-              color: connected ? "oklch(0.75 0.18 145)" : "oklch(0.65 0.25 25)",
+                ? "oklch(0.25 0.1 145 / 0.2)"
+                : "oklch(0.25 0.15 25 / 0.2)",
+              border: `1px solid ${connected ? "oklch(0.55 0.15 145 / 0.5)" : "oklch(0.48 0.22 25 / 0.5)"}`,
+              color: connected ? "oklch(0.7 0.18 145)" : "oklch(0.65 0.25 25)",
             }}
           >
             {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
-            {connected ? "Online" : "Offline"}
+            {connected ? "ONLINE" : "OFFLINE"}
           </div>
+          <button
+            type="button"
+            data-ocid="auth.toggle"
+            onClick={clear}
+            title="Logout"
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 transition-all hover:opacity-80 active:scale-95 tech-font"
+            style={{
+              background: "oklch(0.09 0.015 75 / 0.8)",
+              border: "1px solid oklch(0.22 0.04 75 / 0.6)",
+              color: "oklch(0.5 0.04 75)",
+            }}
+          >
+            <LogOut size={12} />
+            <span className="hidden sm:inline">LOGOUT</span>
+          </button>
         </div>
       </header>
 
-      <main className="flex-1">
+      <main className="flex-1 relative z-10">
         {/* ─── Hero Section ─────────────────────────────────────────────── */}
         <section className="relative flex flex-col items-center pt-16 pb-20 px-4 overflow-hidden">
-          {/* Background vignette */}
           <div
             className="absolute inset-0 pointer-events-none"
             style={{
               background:
-                "radial-gradient(ellipse 80% 60% at 50% 30%, oklch(0.45 0.2 255 / 0.08), transparent)",
+                "radial-gradient(ellipse 80% 60% at 50% 30%, oklch(0.72 0.18 220 / 0.08), transparent)",
             }}
           />
 
@@ -749,38 +1400,33 @@ export default function App() {
             initial={{ opacity: 0, y: -16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7 }}
-            className="mb-2 text-xs font-semibold tracking-[0.3em] uppercase"
-            style={{ color: "oklch(0.82 0.12 183)" }}
+            className="mb-2 text-xs font-semibold tracking-[0.4em] uppercase tech-font"
+            style={{ color: "oklch(0.55 0.08 75)" }}
           >
-            Next-Generation AI Assistant
+            YAC INDUSTRIES — ARTIFICIAL INTELLIGENCE DIVISION
           </motion.div>
           <motion.h1
             initial={{ opacity: 0, y: -12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, delay: 0.1 }}
-            className="text-5xl md:text-6xl font-bold text-center mb-4 leading-tight"
-            style={{ color: "oklch(0.94 0.01 230)" }}
+            className="text-5xl md:text-7xl font-black text-center mb-3 leading-tight tech-font"
+            style={{
+              color: "oklch(0.78 0.15 75)",
+              textShadow:
+                "0 0 30px oklch(0.78 0.15 75 / 0.6), 0 0 70px oklch(0.78 0.15 75 / 0.3)",
+              letterSpacing: "0.2em",
+            }}
           >
-            Meet{" "}
-            <span
-              style={{
-                color: "oklch(0.82 0.12 183)",
-                textShadow:
-                  "0 0 20px oklch(0.82 0.12 183 / 0.5), 0 0 40px oklch(0.82 0.12 183 / 0.25)",
-              }}
-            >
-              JARVIS
-            </span>
+            J.A.R.V.I.S.
           </motion.h1>
           <motion.p
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.7, delay: 0.2 }}
-            className="text-base mb-14 text-center max-w-lg"
-            style={{ color: "oklch(0.72 0.02 228)" }}
+            className="text-sm mb-14 text-center max-w-lg tech-font tracking-widest uppercase"
+            style={{ color: "oklch(0.5 0.06 75)" }}
           >
-            Your intelligent AI companion with real-time internet connectivity.
-            Speak. Ask. Discover.
+            Just A Rather Very Intelligent System
           </motion.p>
 
           {/* Three-column layout: chat | orb | status */}
@@ -795,14 +1441,14 @@ export default function App() {
               <ChatTranscriptPanel messages={chatMessages} />
             </motion.div>
 
-            {/* Center: Orb + Controls */}
+            {/* Center: Arc Reactor Orb + Controls */}
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.8, delay: 0.15 }}
               className="flex flex-col items-center flex-shrink-0"
             >
-              <AnimatedOrb listening={listening} />
+              <ArcReactorOrb listening={listening} />
 
               {/* Mic button */}
               <div className="mt-4 flex flex-col items-center gap-3">
@@ -811,68 +1457,105 @@ export default function App() {
                   data-ocid="jarvis.mic.button"
                   onClick={toggleListening}
                   disabled={isSending}
-                  className="relative rounded-full transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
+                  className="relative transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
                   style={{
                     width: 72,
                     height: 72,
                     background: listening
-                      ? "oklch(0.82 0.12 183 / 0.2)"
-                      : "oklch(0.14 0.02 228)",
-                    border: `2px solid ${listening ? "oklch(0.82 0.12 183)" : "oklch(0.25 0.025 228)"}`,
+                      ? "oklch(0.48 0.22 25 / 0.2)"
+                      : "oklch(0.09 0.015 75)",
+                    border: `2px solid ${listening ? "oklch(0.48 0.22 25)" : "oklch(0.22 0.04 75)"}`,
                     boxShadow: listening
-                      ? "0 0 20px oklch(0.82 0.12 183 / 0.5), 0 0 40px oklch(0.82 0.12 183 / 0.25)"
-                      : "0 0 10px oklch(0.12 0.018 228)",
+                      ? "0 0 25px oklch(0.48 0.22 25 / 0.6), 0 0 50px oklch(0.48 0.22 25 / 0.3)"
+                      : "0 0 10px oklch(0.78 0.15 75 / 0.1)",
+                    clipPath:
+                      "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
                     animation: listening
-                      ? "mic-listening 1.2s ease-in-out infinite"
+                      ? "red-pulse-ring 1.4s ease-in-out infinite"
                       : "none",
                   }}
                 >
-                  {/* Double ring */}
-                  {listening && (
-                    <>
-                      <div
-                        className="absolute rounded-full ring-spin pointer-events-none"
-                        style={{
-                          inset: -8,
-                          border: "1px solid oklch(0.82 0.12 183 / 0.4)",
-                        }}
-                      />
-                      <div
-                        className="absolute rounded-full ring-spin-reverse pointer-events-none"
-                        style={{
-                          inset: -16,
-                          border: "1px dashed oklch(0.75 0.14 210 / 0.3)",
-                        }}
-                      />
-                    </>
-                  )}
                   <div className="flex items-center justify-center w-full h-full">
                     {listening ? (
                       <MicOff
-                        size={28}
-                        style={{ color: "oklch(0.82 0.12 183)" }}
+                        size={26}
+                        style={{ color: "oklch(0.7 0.22 25)" }}
                       />
                     ) : (
-                      <Mic
-                        size={28}
-                        style={{ color: "oklch(0.72 0.02 228)" }}
-                      />
+                      <Mic size={26} style={{ color: "oklch(0.78 0.15 75)" }} />
                     )}
                   </div>
                 </button>
 
                 <p
-                  className="text-sm font-medium tracking-wider"
+                  className="text-sm font-semibold tracking-[0.2em] uppercase tech-font"
                   style={{
                     color: listening
-                      ? "oklch(0.82 0.12 183)"
-                      : "oklch(0.58 0.02 228)",
+                      ? "oklch(0.7 0.22 25)"
+                      : "oklch(0.5 0.06 75)",
+                    textShadow: listening
+                      ? "0 0 12px oklch(0.48 0.22 25 / 0.7)"
+                      : "none",
                   }}
                 >
-                  {listening ? "Listening..." : "Speak to JARVIS"}
+                  {listening ? "LISTENING..." : "SPEAK TO J.A.R.V.I.S."}
                 </p>
 
                 <Waveform listening={listening} />
+
+                {/* Wake word toggle */}
+                <div className="flex items-center gap-2 mt-1">
+                  <button
+                    type="button"
+                    data-ocid="jarvis.wake_word.toggle"
+                    onClick={toggleWakeWord}
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold tracking-widest uppercase transition-all hover:scale-105 active:scale-95 tech-font"
+                    style={{
+                      background: wakeWordActive
+                        ? "oklch(0.25 0.1 145 / 0.2)"
+                        : "oklch(0.09 0.015 75)",
+                      border: `1px solid ${wakeWordActive ? "oklch(0.55 0.15 145 / 0.6)" : "oklch(0.22 0.04 75 / 0.6)"}`,
+                      color: wakeWordActive
+                        ? "oklch(0.7 0.18 145)"
+                        : "oklch(0.5 0.06 75)",
+                      boxShadow: wakeWordActive
+                        ? "0 0 12px oklch(0.55 0.15 145 / 0.3)"
+                        : "none",
+                    }}
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full flex-shrink-0"
+                      style={{
+                        background: wakeWordDetected
+                          ? "oklch(0.78 0.15 75)"
+                          : wakeWordActive
+                            ? "oklch(0.7 0.18 145)"
+                            : "oklch(0.3 0.04 75)",
+                        boxShadow: wakeWordActive
+                          ? wakeWordDetected
+                            ? "0 0 8px oklch(0.78 0.15 75)"
+                            : "0 0 6px oklch(0.7 0.18 145)"
+                          : "none",
+                        animation:
+                          wakeWordActive && !wakeWordDetected
+                            ? "pulse 2s ease-in-out infinite"
+                            : "none",
+                      }}
+                    />
+                    WAKE WORD: {wakeWordActive ? "ON" : "OFF"}
+                  </button>
+                  {wakeWordDetected && (
+                    <span
+                      className="text-xs font-bold tracking-widest uppercase tech-font animate-pulse"
+                      style={{
+                        color: "oklch(0.78 0.15 75)",
+                        textShadow: "0 0 8px oklch(0.78 0.15 75 / 0.7)",
+                      }}
+                    >
+                      JARVIS DETECTED!
+                    </span>
+                  )}
+                </div>
 
                 {/* Text input fallback */}
                 <div
@@ -884,13 +1567,14 @@ export default function App() {
                     value={textInput}
                     onChange={(e) => setTextInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Or type your message..."
+                    placeholder="Or type your command..."
                     disabled={isSending || listening}
-                    className="text-sm rounded-full"
+                    className="text-sm tech-font"
                     style={{
-                      background: "oklch(0.12 0.018 228)",
-                      border: "1px solid oklch(0.25 0.025 228)",
-                      color: "oklch(0.94 0.01 230)",
+                      background: "oklch(0.09 0.015 75)",
+                      border: "1px solid oklch(0.78 0.15 75 / 0.4)",
+                      color: "oklch(0.92 0.04 75)",
+                      borderRadius: 0,
                     }}
                   />
                   <Button
@@ -898,11 +1582,13 @@ export default function App() {
                     onClick={() => sendMessage(textInput)}
                     disabled={isSending || !textInput.trim()}
                     size="icon"
-                    className="rounded-full flex-shrink-0"
+                    className="flex-shrink-0"
                     style={{
-                      background: "oklch(0.82 0.12 183 / 0.2)",
-                      border: "1px solid oklch(0.82 0.12 183 / 0.4)",
-                      color: "oklch(0.82 0.12 183)",
+                      background: "oklch(0.48 0.22 25 / 0.3)",
+                      border: "1px solid oklch(0.48 0.22 25 / 0.6)",
+                      color: "oklch(0.72 0.22 25)",
+                      borderRadius: 0,
+                      boxShadow: "0 0 10px oklch(0.48 0.22 25 / 0.2)",
                     }}
                   >
                     <Send size={16} />
@@ -942,7 +1628,11 @@ export default function App() {
         </section>
 
         {/* ─── Features Section ─────────────────────────────────────────── */}
-        <section id="features" className="py-20 px-4">
+        <section
+          id="features"
+          className="py-20 px-4"
+          style={{ borderTop: "1px solid oklch(0.78 0.15 75 / 0.1)" }}
+        >
           <div className="max-w-5xl mx-auto">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -951,23 +1641,26 @@ export default function App() {
               className="text-center mb-12"
             >
               <p
-                className="text-xs font-semibold tracking-[0.3em] uppercase mb-3"
-                style={{ color: "oklch(0.82 0.12 183)" }}
+                className="text-xs font-semibold tracking-[0.4em] uppercase mb-3 tech-font"
+                style={{ color: "oklch(0.55 0.08 75)" }}
               >
-                Capabilities
+                CAPABILITIES
               </p>
               <h2
-                className="text-3xl md:text-4xl font-bold mb-4"
-                style={{ color: "oklch(0.94 0.01 230)" }}
+                className="text-3xl md:text-4xl font-bold mb-4 tech-font"
+                style={{
+                  color: "oklch(0.78 0.15 75)",
+                  textShadow: "0 0 20px oklch(0.78 0.15 75 / 0.4)",
+                }}
               >
-                Features Overview
+                SYSTEM MODULES
               </h2>
               <p
-                className="text-base max-w-lg mx-auto"
-                style={{ color: "oklch(0.72 0.02 228)" }}
+                className="text-sm max-w-lg mx-auto"
+                style={{ color: "oklch(0.5 0.06 75)" }}
               >
-                JARVIS combines cutting-edge voice AI with real-time internet
-                access to be the most capable assistant you've ever used.
+                J.A.R.V.I.S. combines advanced voice AI with real-time internet
+                access — the most capable assistant in the YAC arsenal.
               </p>
             </motion.div>
 
@@ -980,35 +1673,41 @@ export default function App() {
                   viewport={{ once: true }}
                   transition={{ delay: i * 0.1 }}
                   data-ocid={`features.item.${i + 1}`}
-                  className="glass-card rounded-2xl p-6 flex flex-col gap-4 transition-all hover:border-opacity-60"
-                  style={{ transition: "box-shadow 0.3s" }}
+                  className="iron-panel p-6 flex flex-col gap-4 hud-brackets"
+                  style={{
+                    position: "relative",
+                    transition: "box-shadow 0.3s",
+                  }}
                   onMouseEnter={(e) => {
                     (e.currentTarget as HTMLElement).style.boxShadow =
-                      "0 0 24px oklch(0.82 0.12 183 / 0.15)";
+                      "0 0 30px oklch(0.78 0.15 75 / 0.2), inset 0 0 20px oklch(0.78 0.15 75 / 0.04)";
                   }}
                   onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLElement).style.boxShadow = "none";
+                    (e.currentTarget as HTMLElement).style.boxShadow =
+                      "0 0 20px oklch(0.78 0.15 75 / 0.08), inset 0 0 20px oklch(0.78 0.15 75 / 0.03)";
                   }}
                 >
                   <div
-                    className="flex items-center justify-center w-12 h-12 rounded-xl"
+                    className="flex items-center justify-center w-12 h-12"
                     style={{
-                      background: "oklch(0.82 0.12 183 / 0.1)",
-                      border: "1px solid oklch(0.82 0.12 183 / 0.3)",
-                      color: "oklch(0.82 0.12 183)",
+                      background: "oklch(0.78 0.15 75 / 0.1)",
+                      border: "1px solid oklch(0.78 0.15 75 / 0.4)",
+                      color: "oklch(0.78 0.15 75)",
+                      clipPath:
+                        "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
                     }}
                   >
                     {f.icon}
                   </div>
                   <h3
-                    className="text-lg font-semibold"
-                    style={{ color: "oklch(0.94 0.01 230)" }}
+                    className="text-lg font-semibold tracking-widest uppercase tech-font"
+                    style={{ color: "oklch(0.78 0.15 75)" }}
                   >
                     {f.title}
                   </h3>
                   <p
                     className="text-sm leading-relaxed"
-                    style={{ color: "oklch(0.72 0.02 228)" }}
+                    style={{ color: "oklch(0.55 0.06 75)" }}
                   >
                     {f.desc}
                   </p>
@@ -1022,7 +1721,7 @@ export default function App() {
         <section
           id="how-it-works"
           className="py-20 px-4"
-          style={{ borderTop: "1px solid oklch(0.25 0.025 228 / 0.4)" }}
+          style={{ borderTop: "1px solid oklch(0.78 0.15 75 / 0.1)" }}
         >
           <div className="max-w-5xl mx-auto">
             <motion.div
@@ -1032,32 +1731,34 @@ export default function App() {
               className="text-center mb-12"
             >
               <p
-                className="text-xs font-semibold tracking-[0.3em] uppercase mb-3"
-                style={{ color: "oklch(0.75 0.14 210)" }}
+                className="text-xs font-semibold tracking-[0.4em] uppercase mb-3 tech-font"
+                style={{ color: "oklch(0.55 0.12 220)" }}
               >
-                Process
+                PROTOCOL
               </p>
               <h2
-                className="text-3xl md:text-4xl font-bold mb-4"
-                style={{ color: "oklch(0.94 0.01 230)" }}
+                className="text-3xl md:text-4xl font-bold mb-4 tech-font"
+                style={{
+                  color: "oklch(0.72 0.18 220)",
+                  textShadow: "0 0 20px oklch(0.72 0.18 220 / 0.4)",
+                }}
               >
-                How It Works
+                OPERATION SEQUENCE
               </h2>
               <p
-                className="text-base max-w-lg mx-auto"
-                style={{ color: "oklch(0.72 0.02 228)" }}
+                className="text-sm max-w-lg mx-auto"
+                style={{ color: "oklch(0.5 0.06 75)" }}
               >
-                Three simple steps from query to intelligent response.
+                Three-step protocol from query to intelligent response.
               </p>
             </motion.div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative">
-              {/* Connector line */}
               <div
                 className="hidden md:block absolute top-10 left-1/3 right-1/3 h-px"
                 style={{
                   background:
-                    "linear-gradient(90deg, oklch(0.82 0.12 183 / 0.3), oklch(0.75 0.14 210 / 0.3))",
+                    "linear-gradient(90deg, oklch(0.78 0.15 75 / 0.4), oklch(0.72 0.18 220 / 0.4))",
                 }}
               />
               {steps.map((s, i) => (
@@ -1068,32 +1769,33 @@ export default function App() {
                   viewport={{ once: true }}
                   transition={{ delay: i * 0.15 }}
                   data-ocid={`steps.item.${i + 1}`}
-                  className="glass-card rounded-2xl p-6 flex flex-col gap-3 text-center"
+                  className="iron-panel p-6 flex flex-col gap-3 text-center hud-brackets"
+                  style={{ position: "relative" }}
                 >
                   <div
-                    className="text-3xl font-black font-mono mx-auto"
+                    className="text-3xl font-black font-mono mx-auto tech-font"
                     style={{
-                      color: "oklch(0.82 0.12 183 / 0.3)",
-                      textShadow: "0 0 20px oklch(0.82 0.12 183 / 0.2)",
+                      color: "oklch(0.78 0.15 75 / 0.25)",
+                      textShadow: "0 0 20px oklch(0.78 0.15 75 / 0.15)",
                     }}
                   >
                     {s.num}
                   </div>
                   <div className="flex items-center justify-center gap-2">
                     <h3
-                      className="text-lg font-semibold"
-                      style={{ color: "oklch(0.94 0.01 230)" }}
+                      className="text-lg font-semibold tracking-widest uppercase tech-font"
+                      style={{ color: "oklch(0.78 0.15 75)" }}
                     >
                       {s.title}
                     </h3>
                     <ChevronRight
                       size={16}
-                      style={{ color: "oklch(0.82 0.12 183)" }}
+                      style={{ color: "oklch(0.48 0.22 25)" }}
                     />
                   </div>
                   <p
                     className="text-sm leading-relaxed"
-                    style={{ color: "oklch(0.72 0.02 228)" }}
+                    style={{ color: "oklch(0.5 0.06 75)" }}
                   >
                     {s.desc}
                   </p>
@@ -1106,23 +1808,23 @@ export default function App() {
 
       {/* ─── Footer ───────────────────────────────────────────────────────── */}
       <footer
-        className="px-6 py-8"
-        style={{ borderTop: "1px solid oklch(0.25 0.025 228 / 0.4)" }}
+        className="px-6 py-8 relative z-10"
+        style={{ borderTop: "1px solid oklch(0.78 0.15 75 / 0.2)" }}
       >
         <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <Zap size={14} style={{ color: "oklch(0.82 0.12 183)" }} />
+            <Zap size={14} style={{ color: "oklch(0.78 0.15 75)" }} />
             <span
-              className="font-bold tracking-widest text-sm uppercase"
-              style={{ color: "oklch(0.82 0.12 183)" }}
+              className="font-bold tracking-widest text-sm uppercase tech-font"
+              style={{ color: "oklch(0.78 0.15 75)" }}
             >
-              JARVIS
+              J.A.R.V.I.S.
             </span>
             <span
-              className="text-xs ml-2"
-              style={{ color: "oklch(0.58 0.02 228)" }}
+              className="text-xs ml-2 tech-font tracking-widest"
+              style={{ color: "oklch(0.4 0.04 75)" }}
             >
-              AI Voice Assistant
+              YAC INDUSTRIES
             </span>
           </div>
           <div className="flex gap-6">
@@ -1130,29 +1832,30 @@ export default function App() {
               <a
                 key={link}
                 href={`#${link.toLowerCase().replace(" ", "-")}`}
-                className="text-xs transition-colors"
-                style={{ color: "oklch(0.58 0.02 228)" }}
+                className="text-xs transition-colors tech-font tracking-widest uppercase"
+                style={{ color: "oklch(0.4 0.04 75)" }}
                 onMouseEnter={(e) => {
-                  (e.target as HTMLElement).style.color =
-                    "oklch(0.82 0.12 183)";
+                  (e.target as HTMLElement).style.color = "oklch(0.78 0.15 75)";
                 }}
                 onMouseLeave={(e) => {
-                  (e.target as HTMLElement).style.color =
-                    "oklch(0.58 0.02 228)";
+                  (e.target as HTMLElement).style.color = "oklch(0.4 0.04 75)";
                 }}
               >
                 {link}
               </a>
             ))}
           </div>
-          <p className="text-xs" style={{ color: "oklch(0.58 0.02 228)" }}>
+          <p
+            className="text-xs tech-font"
+            style={{ color: "oklch(0.38 0.04 75)" }}
+          >
             © {new Date().getFullYear()}. Built with ♥ using{" "}
             <a
               href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
               target="_blank"
               rel="noopener noreferrer"
               className="underline"
-              style={{ color: "oklch(0.72 0.02 228)" }}
+              style={{ color: "oklch(0.55 0.08 75)" }}
             >
               caffeine.ai
             </a>

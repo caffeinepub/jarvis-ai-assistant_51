@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -6,51 +6,48 @@
 
 @layer base {
   :root {
-    --radius: 0.625rem;
-    /* Dark HUD theme - always dark */
-    --background: 0.07 0.01 230;
-    --foreground: 0.94 0.01 230;
-    --card: 0.12 0.018 228;
-    --card-foreground: 0.94 0.01 230;
-    --popover: 0.14 0.02 228;
-    --popover-foreground: 0.94 0.01 230;
-    --primary: 0.82 0.12 183;
-    --primary-foreground: 0.07 0.01 230;
-    --secondary: 0.14 0.02 228;
-    --secondary-foreground: 0.94 0.01 230;
-    --muted: 0.14 0.02 228;
-    --muted-foreground: 0.58 0.02 228;
-    --accent: 0.75 0.14 210;
-    --accent-foreground: 0.07 0.01 230;
-    --destructive: 0.577 0.245 27.325;
-    --destructive-foreground: 0.985 0 0;
-    --border: 0.25 0.025 228;
-    --input: 0.18 0.022 228;
-    --ring: 0.82 0.12 183;
-    --chart-1: 0.82 0.12 183;
-    --chart-2: 0.75 0.14 210;
-    --chart-3: 0.65 0.18 225;
-    --chart-4: 0.45 0.2 255;
-    --chart-5: 0.6 0.15 200;
-    --sidebar: 0.12 0.018 228;
-    --sidebar-foreground: 0.94 0.01 230;
-    --sidebar-primary: 0.82 0.12 183;
-    --sidebar-primary-foreground: 0.07 0.01 230;
-    --sidebar-accent: 0.14 0.02 228;
-    --sidebar-accent-foreground: 0.94 0.01 230;
-    --sidebar-border: 0.25 0.025 228;
-    --sidebar-ring: 0.82 0.12 183;
-    /* Custom HUD tokens */
-    --cyan: 0.82 0.12 183;
-    --aqua: 0.75 0.14 210;
-    --blue-glow: 0.65 0.18 225;
-    --deep-blue: 0.45 0.2 255;
-    --surface: 0.12 0.018 228;
-    --surface-2: 0.14 0.02 228;
-    --hud-border: 0.25 0.025 228;
-    --text-primary: 0.94 0.01 230;
-    --text-body: 0.72 0.02 228;
-    --text-muted: 0.58 0.02 228;
+    --radius: 0.375rem;
+    /* Iron Man JARVIS theme - always dark */
+    --background: 0.05 0.01 220;
+    --foreground: 0.92 0.04 75;
+    --card: 0.09 0.015 75;
+    --card-foreground: 0.92 0.04 75;
+    --popover: 0.1 0.018 75;
+    --popover-foreground: 0.92 0.04 75;
+    --primary: 0.78 0.15 75;
+    --primary-foreground: 0.05 0.01 220;
+    --secondary: 0.1 0.02 75;
+    --secondary-foreground: 0.92 0.04 75;
+    --muted: 0.1 0.015 75;
+    --muted-foreground: 0.5 0.04 75;
+    --accent: 0.72 0.18 220;
+    --accent-foreground: 0.05 0.01 220;
+    --destructive: 0.48 0.22 25;
+    --destructive-foreground: 0.92 0.04 75;
+    --border: 0.22 0.04 75;
+    --input: 0.12 0.025 75;
+    --ring: 0.78 0.15 75;
+    --chart-1: 0.78 0.15 75;
+    --chart-2: 0.72 0.18 220;
+    --chart-3: 0.48 0.22 25;
+    --chart-4: 0.65 0.12 75;
+    --chart-5: 0.55 0.16 220;
+    --sidebar: 0.09 0.015 75;
+    --sidebar-foreground: 0.92 0.04 75;
+    --sidebar-primary: 0.78 0.15 75;
+    --sidebar-primary-foreground: 0.05 0.01 220;
+    --sidebar-accent: 0.1 0.02 75;
+    --sidebar-accent-foreground: 0.92 0.04 75;
+    --sidebar-border: 0.22 0.04 75;
+    --sidebar-ring: 0.78 0.15 75;
+    /* Custom Iron Man tokens */
+    --gold: 0.78 0.15 75;
+    --iron-red: 0.48 0.22 25;
+    --arc-blue: 0.72 0.18 220;
+    --panel-bg: 0.09 0.015 75;
+    --gold-border: 0.22 0.04 75;
+    --text-bright: 0.92 0.04 75;
+    --text-dim: 0.5 0.04 75;
   }
 
   * {
@@ -59,45 +56,93 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: "Inter", sans-serif;
-    background: linear-gradient(
-      180deg,
-      oklch(0.07 0.01 230) 0%,
-      oklch(0.09 0.015 228) 100%
-    );
+    font-family: "Rajdhani", sans-serif;
+    background: oklch(0.05 0.01 220);
     min-height: 100vh;
+    overflow-x: hidden;
   }
 }
 
 @layer utilities {
-  .hud-border {
-    border: 1px solid oklch(var(--hud-border));
+  .iron-panel {
+    background: oklch(0.09 0.015 75 / 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid oklch(0.78 0.15 75 / 0.35);
+    box-shadow: 0 0 20px oklch(0.78 0.15 75 / 0.08), inset 0 0 20px
+      oklch(0.78 0.15 75 / 0.03);
   }
 
-  .glow-cyan {
-    box-shadow: 0 0 20px oklch(0.82 0.12 183 / 0.3), 0 0 40px
-      oklch(0.82 0.12 183 / 0.15);
+  .glow-gold {
+    box-shadow: 0 0 20px oklch(0.78 0.15 75 / 0.4), 0 0 50px
+      oklch(0.78 0.15 75 / 0.2);
   }
 
-  .glow-cyan-text {
-    text-shadow: 0 0 10px oklch(0.82 0.12 183 / 0.7), 0 0 20px
-      oklch(0.82 0.12 183 / 0.4);
+  .glow-gold-text {
+    text-shadow: 0 0 12px oklch(0.78 0.15 75 / 0.7), 0 0 24px
+      oklch(0.78 0.15 75 / 0.4);
+  }
+
+  .glow-red {
+    box-shadow: 0 0 20px oklch(0.48 0.22 25 / 0.5), 0 0 50px
+      oklch(0.48 0.22 25 / 0.3);
   }
 
   .glow-blue {
-    box-shadow: 0 0 20px oklch(0.65 0.18 225 / 0.3), 0 0 40px
-      oklch(0.45 0.2 255 / 0.15);
+    box-shadow: 0 0 20px oklch(0.72 0.18 220 / 0.4), 0 0 50px
+      oklch(0.72 0.18 220 / 0.2);
   }
 
-  .glass-card {
-    background: oklch(0.12 0.018 228 / 0.85);
-    backdrop-filter: blur(12px);
-    border: 1px solid oklch(0.25 0.025 228);
+  .tech-font {
+    font-family: "Share Tech Mono", monospace;
+  }
+
+  /* HUD corner brackets */
+  .hud-brackets {
+    position: relative;
+  }
+  .hud-brackets::before,
+  .hud-brackets::after {
+    content: "";
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    pointer-events: none;
+  }
+  .hud-brackets::before {
+    top: -1px;
+    left: -1px;
+    border-top: 2px solid oklch(0.78 0.15 75 / 0.8);
+    border-left: 2px solid oklch(0.78 0.15 75 / 0.8);
+  }
+  .hud-brackets::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom: 2px solid oklch(0.78 0.15 75 / 0.8);
+    border-right: 2px solid oklch(0.78 0.15 75 / 0.8);
   }
 }
 
-/* Orb animation keyframes */
-@keyframes orb-pulse {
+/* ─── Keyframes ─────────────────────────────────────────────────────────── */
+
+@keyframes arc-reactor-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes arc-reactor-spin-reverse {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+@keyframes arc-reactor-pulse {
   0%,
   100% {
     transform: scale(1);
@@ -109,7 +154,7 @@
   }
 }
 
-@keyframes ring-rotate {
+@keyframes hex-ring-rotate {
   from {
     transform: rotate(0deg);
   }
@@ -118,25 +163,22 @@
   }
 }
 
-@keyframes ring-rotate-reverse {
-  from {
-    transform: rotate(0deg);
+@keyframes scanline {
+  0% {
+    transform: translateY(-100%);
   }
-  to {
-    transform: rotate(-360deg);
+  100% {
+    transform: translateY(100vh);
   }
 }
 
-@keyframes plasma-drift {
+@keyframes hud-blink {
   0%,
   100% {
-    transform: translate(-50%, -50%) rotate(0deg) scale(1);
+    opacity: 1;
   }
-  33% {
-    transform: translate(-50%, -50%) rotate(120deg) scale(1.05);
-  }
-  66% {
-    transform: translate(-50%, -50%) rotate(240deg) scale(0.97);
+  50% {
+    opacity: 0.5;
   }
 }
 
@@ -161,49 +203,108 @@
   }
 }
 
-@keyframes glow-pulse {
+@keyframes gold-pulse {
   0%,
   100% {
-    box-shadow: 0 0 20px oklch(0.82 0.12 183 / 0.3), 0 0 40px
-      oklch(0.82 0.12 183 / 0.1);
+    box-shadow: 0 0 20px oklch(0.78 0.15 75 / 0.3), 0 0 40px
+      oklch(0.78 0.15 75 / 0.1);
   }
   50% {
-    box-shadow: 0 0 30px oklch(0.82 0.12 183 / 0.5), 0 0 60px
-      oklch(0.82 0.12 183 / 0.25);
+    box-shadow: 0 0 35px oklch(0.78 0.15 75 / 0.55), 0 0 70px
+      oklch(0.78 0.15 75 / 0.28);
   }
 }
 
-@keyframes mic-listening {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 oklch(0.82 0.12 183 / 0.5);
+@keyframes red-pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+    box-shadow: 0 0 0 0 oklch(0.48 0.22 25 / 0.6);
   }
-  50% {
-    box-shadow: 0 0 0 16px oklch(0.82 0.12 183 / 0);
+  70% {
+    transform: scale(1.08);
+    opacity: 0.7;
+    box-shadow: 0 0 0 18px oklch(0.48 0.22 25 / 0);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+    box-shadow: 0 0 0 0 oklch(0.48 0.22 25 / 0);
   }
 }
 
-.orb-pulse {
-  animation: orb-pulse 4s ease-in-out infinite;
+@keyframes reactor-glow {
+  0%,
+  100% {
+    opacity: 0.8;
+    filter: blur(1px);
+  }
+  50% {
+    opacity: 1;
+    filter: blur(2px);
+  }
 }
-.ring-spin {
-  animation: ring-rotate 8s linear infinite;
+
+/* ─── Animation classes ──────────────────────────────────────────────────── */
+
+.arc-spin-slow {
+  animation: arc-reactor-spin 18s linear infinite;
 }
-.ring-spin-reverse {
-  animation: ring-rotate-reverse 12s linear infinite;
+.arc-spin-medium {
+  animation: arc-reactor-spin 8s linear infinite;
 }
-.ring-spin-slow {
-  animation: ring-rotate 20s linear infinite;
+.arc-spin-reverse {
+  animation: arc-reactor-spin-reverse 12s linear infinite;
 }
-.plasma-drift {
-  animation: plasma-drift 10s ease-in-out infinite;
+.arc-spin-fast {
+  animation: arc-reactor-spin 4s linear infinite;
 }
-.glow-pulse-anim {
-  animation: glow-pulse 3s ease-in-out infinite;
+.arc-pulse {
+  animation: arc-reactor-pulse 3s ease-in-out infinite;
 }
-.mic-listening-anim {
-  animation: mic-listening 1.2s ease-in-out infinite;
+.hud-blink {
+  animation: hud-blink 2s ease-in-out infinite;
+}
+.reactor-glow-anim {
+  animation: reactor-glow 2.5s ease-in-out infinite;
+}
+.gold-pulse-anim {
+  animation: gold-pulse 3s ease-in-out infinite;
+}
+.red-pulse-ring {
+  animation: red-pulse-ring 1.4s ease-in-out infinite;
 }
 .fade-in-up {
   animation: fade-in-up 0.4s ease-out forwards;
+}
+
+/* Scanline overlay */
+.scanline-overlay {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    oklch(0.78 0.15 75 / 0.012) 2px,
+    oklch(0.78 0.15 75 / 0.012) 4px
+  );
+}
+
+.scanline-sweep {
+  pointer-events: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 60px;
+  z-index: 10000;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    oklch(0.78 0.15 75 / 0.04) 50%,
+    transparent 100%
+  );
+  animation: scanline 8s linear infinite;
 }
