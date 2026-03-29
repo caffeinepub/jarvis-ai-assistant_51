@@ -1,0 +1,209 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --radius: 0.625rem;
+    /* Dark HUD theme - always dark */
+    --background: 0.07 0.01 230;
+    --foreground: 0.94 0.01 230;
+    --card: 0.12 0.018 228;
+    --card-foreground: 0.94 0.01 230;
+    --popover: 0.14 0.02 228;
+    --popover-foreground: 0.94 0.01 230;
+    --primary: 0.82 0.12 183;
+    --primary-foreground: 0.07 0.01 230;
+    --secondary: 0.14 0.02 228;
+    --secondary-foreground: 0.94 0.01 230;
+    --muted: 0.14 0.02 228;
+    --muted-foreground: 0.58 0.02 228;
+    --accent: 0.75 0.14 210;
+    --accent-foreground: 0.07 0.01 230;
+    --destructive: 0.577 0.245 27.325;
+    --destructive-foreground: 0.985 0 0;
+    --border: 0.25 0.025 228;
+    --input: 0.18 0.022 228;
+    --ring: 0.82 0.12 183;
+    --chart-1: 0.82 0.12 183;
+    --chart-2: 0.75 0.14 210;
+    --chart-3: 0.65 0.18 225;
+    --chart-4: 0.45 0.2 255;
+    --chart-5: 0.6 0.15 200;
+    --sidebar: 0.12 0.018 228;
+    --sidebar-foreground: 0.94 0.01 230;
+    --sidebar-primary: 0.82 0.12 183;
+    --sidebar-primary-foreground: 0.07 0.01 230;
+    --sidebar-accent: 0.14 0.02 228;
+    --sidebar-accent-foreground: 0.94 0.01 230;
+    --sidebar-border: 0.25 0.025 228;
+    --sidebar-ring: 0.82 0.12 183;
+    /* Custom HUD tokens */
+    --cyan: 0.82 0.12 183;
+    --aqua: 0.75 0.14 210;
+    --blue-glow: 0.65 0.18 225;
+    --deep-blue: 0.45 0.2 255;
+    --surface: 0.12 0.018 228;
+    --surface-2: 0.14 0.02 228;
+    --hud-border: 0.25 0.025 228;
+    --text-primary: 0.94 0.01 230;
+    --text-body: 0.72 0.02 228;
+    --text-muted: 0.58 0.02 228;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Inter", sans-serif;
+    background: linear-gradient(
+      180deg,
+      oklch(0.07 0.01 230) 0%,
+      oklch(0.09 0.015 228) 100%
+    );
+    min-height: 100vh;
+  }
+}
+
+@layer utilities {
+  .hud-border {
+    border: 1px solid oklch(var(--hud-border));
+  }
+
+  .glow-cyan {
+    box-shadow: 0 0 20px oklch(0.82 0.12 183 / 0.3), 0 0 40px
+      oklch(0.82 0.12 183 / 0.15);
+  }
+
+  .glow-cyan-text {
+    text-shadow: 0 0 10px oklch(0.82 0.12 183 / 0.7), 0 0 20px
+      oklch(0.82 0.12 183 / 0.4);
+  }
+
+  .glow-blue {
+    box-shadow: 0 0 20px oklch(0.65 0.18 225 / 0.3), 0 0 40px
+      oklch(0.45 0.2 255 / 0.15);
+  }
+
+  .glass-card {
+    background: oklch(0.12 0.018 228 / 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid oklch(0.25 0.025 228);
+  }
+}
+
+/* Orb animation keyframes */
+@keyframes orb-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+}
+
+@keyframes ring-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ring-rotate-reverse {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+@keyframes plasma-drift {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) rotate(0deg) scale(1);
+  }
+  33% {
+    transform: translate(-50%, -50%) rotate(120deg) scale(1.05);
+  }
+  66% {
+    transform: translate(-50%, -50%) rotate(240deg) scale(0.97);
+  }
+}
+
+@keyframes wave-bar {
+  0%,
+  100% {
+    height: 4px;
+  }
+  50% {
+    height: var(--wave-height, 20px);
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes glow-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 20px oklch(0.82 0.12 183 / 0.3), 0 0 40px
+      oklch(0.82 0.12 183 / 0.1);
+  }
+  50% {
+    box-shadow: 0 0 30px oklch(0.82 0.12 183 / 0.5), 0 0 60px
+      oklch(0.82 0.12 183 / 0.25);
+  }
+}
+
+@keyframes mic-listening {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 oklch(0.82 0.12 183 / 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 16px oklch(0.82 0.12 183 / 0);
+  }
+}
+
+.orb-pulse {
+  animation: orb-pulse 4s ease-in-out infinite;
+}
+.ring-spin {
+  animation: ring-rotate 8s linear infinite;
+}
+.ring-spin-reverse {
+  animation: ring-rotate-reverse 12s linear infinite;
+}
+.ring-spin-slow {
+  animation: ring-rotate 20s linear infinite;
+}
+.plasma-drift {
+  animation: plasma-drift 10s ease-in-out infinite;
+}
+.glow-pulse-anim {
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+.mic-listening-anim {
+  animation: mic-listening 1.2s ease-in-out infinite;
+}
+.fade-in-up {
+  animation: fade-in-up 0.4s ease-out forwards;
+}
