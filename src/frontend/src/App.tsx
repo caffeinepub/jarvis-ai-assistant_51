@@ -32,83 +32,81 @@ interface ChatMessage {
   timestamp: number;
 }
 
-// Free AI via Pollinations.ai — no API key required
+// Free AI via Pollinations.ai — all models raced in parallel for max speed
 async function callGeminiAPI(query: string): Promise<string> {
-  const systemPrompt =
-    "You are J.A.R.V.I.S., an advanced AI assistant created by YAC. Answer accurately, helpfully, and concisely.";
+  const today = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const systemPrompt = `You are J.A.R.V.I.S., an advanced AI assistant created by YAC. Today is ${today}. You have real-time knowledge of current events, news, sports, weather, technology, and world affairs as of your training. Always give accurate, helpful, and up-to-date answers. Be concise and direct.`;
 
-  // Attempt 1: Pollinations GET endpoint (simplest, avoids CORS issues)
+  const makePost = async (model: string): Promise<string> => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch("https://text.pollinations.ai/openai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: query },
+          ],
+          model,
+          private: true,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(id);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const text = data?.choices?.[0]?.message?.content?.trim();
+      if (!text) throw new Error("Empty response");
+      return text;
+    } catch (e) {
+      clearTimeout(id);
+      throw e;
+    }
+  };
+
+  // Race all models in parallel — fastest wins
   try {
+    const result = await Promise.any([
+      makePost("openai"),
+      makePost("openai-large"),
+      makePost("mistral"),
+      makePost("llama"),
+    ]);
+    if (result) return result;
+  } catch {
+    // All parallel attempts failed, try GET fallback
+  }
+
+  // Final fallback: Pollinations GET
+  try {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 15000);
     const prompt = encodeURIComponent(
       `${systemPrompt}\n\nUser: ${query}\n\nAssistant:`,
     );
     const res = await fetch(`https://text.pollinations.ai/${prompt}`, {
-      method: "GET",
       headers: { Accept: "text/plain" },
+      signal: controller.signal,
     });
+    clearTimeout(id);
     if (res.ok) {
       const text = await res.text();
-      if (text?.trim()) return text.trim();
+      if (
+        text?.trim() &&
+        !text.trim().startsWith("{") &&
+        !text.trim().startsWith("<")
+      )
+        return text.trim();
     }
   } catch (e) {
-    console.warn("Pollinations GET failed:", e);
-  }
-
-  // Attempt 2: Pollinations POST with openai model
-  try {
-    const res = await fetch("https://text.pollinations.ai/openai", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: query },
-        ],
-        model: "openai",
-      }),
-    });
-    if (res.ok) {
-      const text = await res.text();
-      if (text?.trim()) return text.trim();
-    }
-  } catch (e) {
-    console.warn("Pollinations POST openai failed:", e);
-  }
-
-  // Attempt 3: Pollinations with mistral model
-  try {
-    const res = await fetch("https://text.pollinations.ai/openai", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: query },
-        ],
-        model: "mistral",
-      }),
-    });
-    if (res.ok) {
-      const text = await res.text();
-      if (text?.trim()) return text.trim();
-    }
-  } catch (e) {
-    console.warn("Pollinations mistral failed:", e);
-  }
-
-  // Attempt 4: DuckDuckGo instant answers as last resort
-  try {
-    const res = await fetch(
-      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
-      { headers: { Accept: "application/json" } },
-    );
-    if (res.ok) {
-      const data = await res.json();
-      const answer = data.AbstractText || data.Answer || data.Definition || "";
-      if (answer.trim()) return answer.trim();
-    }
-  } catch (e) {
-    console.warn("DuckDuckGo fallback failed:", e);
+    console.warn("Pollinations GET fallback failed:", e);
   }
 
   return "I am currently unable to reach external services. Please check your internet connection and try again.";
@@ -1037,6 +1035,8 @@ export default function App() {
   const speakText = useCallback(async (text: string) => {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
+    // Small delay to let cancel() settle before speaking
+    await new Promise((r) => setTimeout(r, 150));
     const voices = await loadVoices();
     const utt = new SpeechSynthesisUtterance(text);
     utt.rate = 0.92;
@@ -1044,6 +1044,20 @@ export default function App() {
     utt.volume = 1.0;
     const voice = pickJarvisVoice(voices);
     if (voice) utt.voice = voice;
+    // Chrome keepalive hack: pause/resume every 10s to prevent cutoff
+    let keepAlive: ReturnType<typeof setInterval> | null = null;
+    utt.onstart = () => {
+      keepAlive = setInterval(() => {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      }, 10000);
+    };
+    utt.onend = () => {
+      if (keepAlive) clearInterval(keepAlive);
+    };
+    utt.onerror = () => {
+      if (keepAlive) clearInterval(keepAlive);
+    };
     window.speechSynthesis.speak(utt);
   }, []);
 
@@ -1156,7 +1170,7 @@ export default function App() {
       wakeRec.onresult = (event: any) => {
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const transcript = event.results[i][0].transcript.toLowerCase();
-          if (transcript.includes("jarvis")) {
+          if (transcript.includes("jar")) {
             // Wake word detected!
             wakeRec.stop();
             setWakeWordDetected(true);
