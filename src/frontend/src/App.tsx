@@ -40,11 +40,11 @@ async function callGeminiAPI(query: string): Promise<string> {
     month: "long",
     day: "numeric",
   });
-  const systemPrompt = `You are J.A.R.V.I.S., an advanced AI assistant created by YAC. Today is ${today}. You have real-time knowledge of current events, news, sports, weather, technology, and world affairs as of your training. Always give accurate, helpful, and up-to-date answers. Be concise and direct.`;
+  const systemPrompt = `You are J.A.R.V.I.S., AI by YAC. Today: ${today}. Give concise, accurate, direct answers in 2-3 sentences max.`;
 
   const makePost = async (model: string): Promise<string> => {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 12000);
+    const id = setTimeout(() => controller.abort(), 6000);
     try {
       const res = await fetch("https://text.pollinations.ai/openai", {
         method: "POST",
@@ -55,6 +55,7 @@ async function callGeminiAPI(query: string): Promise<string> {
             { role: "user", content: query },
           ],
           model,
+          max_tokens: 250,
           private: true,
         }),
         signal: controller.signal,
@@ -87,7 +88,7 @@ async function callGeminiAPI(query: string): Promise<string> {
   // Final fallback: Pollinations GET
   try {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 15000);
+    const id = setTimeout(() => controller.abort(), 8000);
     const prompt = encodeURIComponent(
       `${systemPrompt}\n\nUser: ${query}\n\nAssistant:`,
     );
