@@ -32,52 +32,86 @@ interface ChatMessage {
   timestamp: number;
 }
 
-const GEMINI_API_KEY = "AIzaSyAFOZHLkAm-kE1-RC6RXwtPIrIFQI1-Na8";
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-
+// Free AI via Pollinations.ai — no API key required
 async function callGeminiAPI(query: string): Promise<string> {
+  const systemPrompt =
+    "You are J.A.R.V.I.S., an advanced AI assistant created by YAC. Answer accurately, helpfully, and concisely.";
+
+  // Attempt 1: Pollinations GET endpoint (simplest, avoids CORS issues)
   try {
-    const res = await fetch(GEMINI_API_URL, {
+    const prompt = encodeURIComponent(
+      `${systemPrompt}\n\nUser: ${query}\n\nAssistant:`,
+    );
+    const res = await fetch(`https://text.pollinations.ai/${prompt}`, {
+      method: "GET",
+      headers: { Accept: "text/plain" },
+    });
+    if (res.ok) {
+      const text = await res.text();
+      if (text?.trim()) return text.trim();
+    }
+  } catch (e) {
+    console.warn("Pollinations GET failed:", e);
+  }
+
+  // Attempt 2: Pollinations POST with openai model
+  try {
+    const res = await fetch("https://text.pollinations.ai/openai", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `You are J.A.R.V.I.S., an advanced AI assistant created by YAC. You have access to real-time internet search. Answer accurately and helpfully using current information: ${query}`,
-              },
-            ],
-          },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: query },
         ],
-        tools: [{ googleSearch: {} }],
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 1024,
-        },
+        model: "openai",
       }),
     });
-    const data = await res.json();
-    if (!res.ok) {
-      console.error("Gemini API HTTP error:", res.status, data);
-      return "I encountered an error connecting to the AI. Please try again.";
+    if (res.ok) {
+      const text = await res.text();
+      if (text?.trim()) return text.trim();
     }
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (text) return text;
-    // Fallback: check if grounding returned anything
-    const groundingChunks =
-      data?.candidates?.[0]?.groundingMetadata?.groundingChunks;
-    if (groundingChunks?.length > 0) {
-      return groundingChunks
-        .map((c: { web?: { snippet?: string } }) => c.web?.snippet)
-        .filter(Boolean)
-        .join(" ");
-    }
-    return "I received a response but couldn't extract the answer. Please try rephrasing your question.";
-  } catch (err) {
-    console.error("Gemini API error:", err);
-    return "I was unable to connect to the internet. Please check your connection and try again.";
+  } catch (e) {
+    console.warn("Pollinations POST openai failed:", e);
   }
+
+  // Attempt 3: Pollinations with mistral model
+  try {
+    const res = await fetch("https://text.pollinations.ai/openai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: query },
+        ],
+        model: "mistral",
+      }),
+    });
+    if (res.ok) {
+      const text = await res.text();
+      if (text?.trim()) return text.trim();
+    }
+  } catch (e) {
+    console.warn("Pollinations mistral failed:", e);
+  }
+
+  // Attempt 4: DuckDuckGo instant answers as last resort
+  try {
+    const res = await fetch(
+      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
+      { headers: { Accept: "application/json" } },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const answer = data.AbstractText || data.Answer || data.Definition || "";
+      if (answer.trim()) return answer.trim();
+    }
+  } catch (e) {
+    console.warn("DuckDuckGo fallback failed:", e);
+  }
+
+  return "I am currently unable to reach external services. Please check your internet connection and try again.";
 }
 
 // ─── DuckDuckGo JSON parser ────────────────────────────────────────────────
