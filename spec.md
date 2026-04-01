@@ -1,24 +1,33 @@
-# Jarvis AI Assistant
+# YAC - AI Assistant Upgrade v22
 
 ## Current State
-No existing source files. Rebuilding from scratch.
+YAC is an Iron Man-themed AI voice assistant (HUD interface, arc reactor orb, gold/red color scheme) running on React/TypeScript frontend. It uses Pollinations.ai ChatGPT (4 models in parallel), Internet Identity auth, voice input/output, wake word "jar", auto-scrolling chat panel. Token limit is 250, timeout is 6s.
 
 ## Requested Changes (Diff)
 
 ### Add
-- Dark HUD interface with animated plasma orb
-- Voice input via Web Speech API (SpeechRecognition)
-- Voice output via Web Speech Synthesis API (deep/robotic voice)
-- Internet-connected AI answers via backend HTTP outcalls to a free AI/search API (DuckDuckGo Instant Answer API)
-- Text input fallback for non-voice browsers
-- Query display and response display
+- Live clock/date widget displayed in the HUD corner at all times
+- Quick-action HUD buttons: NEWS, WEATHER, SPORTS, TIME -- tapping instantly sends that query to the AI
+- "Thinking" / processing animation while AI is generating a response
+- Conversation history persisted to localStorage and restored on reload
+- Better mic error recovery -- clear error messages, auto-retry logic
+- More reliable wake word detection with debounce and continuous restart
 
 ### Modify
-N/A
+- Increase max_tokens from 250 to 400 for fuller answers
+- Improve system prompt: instruct AI to be direct, fast, include real-time context (today's date + time)
+- Wake word detection: more resilient restart loop, less likely to silently stop
+- Mic button: show specific error reason (permission denied, no speech, network)
 
 ### Remove
-N/A
+- Nothing removed
 
 ## Implementation Plan
-1. Backend: HTTP outcall to DuckDuckGo Instant Answer API (free, no key needed) — `query(text: Text) : async Text`
-2. Frontend: Dark HUD UI with animated orb, SpeechRecognition for input, SpeechSynthesis for spoken output, wired to backend query function
+1. Add live clock state that updates every second, render in HUD
+2. Add quick-action buttons row below the chat panel: NEWS, WEATHER, SPORTS, TIME
+3. Add thinking/processing animation (pulsing dots or HUD scan-line) shown while awaiting AI response
+4. Save/load conversation messages to/from localStorage key `yac-history`
+5. Update system prompt to include current date+time and instruct concise but complete answers
+6. Increase max_tokens to 400
+7. Improve SpeechRecognition restart loop: use onend to always restart when wake word mode is active, with a small delay
+8. Improve mic error handling: map error codes to user-friendly HUD messages

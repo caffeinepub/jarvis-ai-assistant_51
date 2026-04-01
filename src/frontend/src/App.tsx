@@ -34,42 +34,45 @@ interface ChatMessage {
 
 // Free AI via Pollinations.ai — all models raced in parallel for max speed
 async function callGeminiAPI(query: string): Promise<string> {
-  const today = new Date().toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-  const systemPrompt = `You are J.A.R.V.I.S., AI by YAC. Today: ${today}. Give concise, accurate, direct answers in 2-3 sentences max.`;
+  const nowStr = new Date().toISOString();
+  const systemPrompt = `You are YAC, an advanced AI assistant. Today is ${nowStr}. You have knowledge of current events, news, weather, sports, and stocks. Be direct, informative, and concise. Answer in under 150 words.`;
 
   const makePost = async (model: string): Promise<string> => {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 6000);
-    try {
-      const res = await fetch("https://text.pollinations.ai/openai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: query },
-          ],
-          model,
-          max_tokens: 250,
-          private: true,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(id);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const text = data?.choices?.[0]?.message?.content?.trim();
-      if (!text) throw new Error("Empty response");
-      return text;
-    } catch (e) {
-      clearTimeout(id);
-      throw e;
+    const endpoints = [
+      "https://text.pollinations.ai/openai",
+      "https://api.pollinations.ai/v1/chat/completions",
+    ];
+    const body = JSON.stringify({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: query },
+      ],
+      model,
+      max_tokens: 400,
+      private: true,
+    });
+    for (const endpoint of endpoints) {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 10000);
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          signal: controller.signal,
+        });
+        clearTimeout(id);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const text = data?.choices?.[0]?.message?.content?.trim();
+        if (!text) throw new Error("Empty response");
+        return text;
+      } catch (e) {
+        clearTimeout(id);
+        if (endpoint === endpoints[endpoints.length - 1]) throw e;
+      }
     }
+    throw new Error("All endpoints failed");
   };
 
   // Race all models in parallel — fastest wins
@@ -985,7 +988,19 @@ export default function App() {
   const { data: remoteMessages = [] } = useGetAllMessages();
   const { data: connected = false } = useIsConnected();
 
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const stored = localStorage.getItem("yac-history");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed.slice(-50);
+      }
+    } catch (_e) {
+      // ignore
+    }
+    return [];
+  });
+  const [liveTime, setLiveTime] = useState("");
   const [listening, setListening] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -997,6 +1012,7 @@ export default function App() {
   const [wakeWordDetected, setWakeWordDetected] = useState(false);
   const wakeListenerRef = useRef<any>(null);
   const wakeWordActiveRef = useRef(false);
+  const [voiceStatus, setVoiceStatus] = useState("");
 
   // Uptime counter
   useEffect(() => {
@@ -1009,6 +1025,49 @@ export default function App() {
     }, 1000);
     return () => clearInterval(id);
   }, [startTime]);
+
+  // Live clock
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      const months = [
+        "JAN",
+        "FEB",
+        "MAR",
+        "APR",
+        "MAY",
+        "JUN",
+        "JUL",
+        "AUG",
+        "SEP",
+        "OCT",
+        "NOV",
+        "DEC",
+      ];
+      const mon = months[now.getMonth()];
+      const day = String(now.getDate()).padStart(2, "0");
+      const yr = now.getFullYear();
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      const ss = String(now.getSeconds()).padStart(2, "0");
+      setLiveTime(`${mon} ${day} ${yr} | ${hh}:${mm}:${ss}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Save chat history to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "yac-history",
+        JSON.stringify(chatMessages.slice(-50)),
+      );
+    } catch (_e) {
+      // ignore
+    }
+  }, [chatMessages]);
 
   // Seed chat from remote messages
   useEffect(() => {
@@ -1133,23 +1192,38 @@ export default function App() {
     recognition.lang = "en-US";
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
+    let resultReceived = false;
     recognition.onresult = (event: any) => {
+      resultReceived = true;
       const transcript = event.results[0][0].transcript;
       setListening(false);
       sendMessage(transcript);
     };
-    recognition.onerror = () => {
+    recognition.onerror = (event: any) => {
       setListening(false);
-      // Restart wake listener if active
+      const errorCode = event?.error || "";
+      if (errorCode === "not-allowed" || errorCode === "permission-denied") {
+        setVoiceStatus("MICROPHONE ACCESS DENIED - CHECK BROWSER SETTINGS");
+      } else if (errorCode === "no-speech") {
+        setVoiceStatus("NO SPEECH DETECTED - TRY AGAIN");
+      } else if (errorCode === "network") {
+        setVoiceStatus("NETWORK ERROR - CHECK CONNECTION");
+      } else if (errorCode === "aborted") {
+        setVoiceStatus("LISTENING STOPPED");
+      } else {
+        setVoiceStatus("VOICE ERROR - TRY AGAIN");
+      }
       if (wakeWordActiveRef.current) {
         setTimeout(() => startWakeListener(), 500);
       }
     };
     recognition.onend = () => {
       setListening(false);
-      // Restart wake listener if active
+      if (!resultReceived && !wakeWordActiveRef.current) {
+        setVoiceStatus("NO SPEECH DETECTED - TRY AGAIN");
+      }
       if (wakeWordActiveRef.current) {
-        setTimeout(() => startWakeListener(), 500);
+        setTimeout(() => startWakeListener(), 300);
       }
     };
     recognitionRef.current = recognition;
@@ -1211,8 +1285,8 @@ export default function App() {
           setTimeout(() => startWakeListener(), 1000);
       };
       wakeRec.onend = () => {
-        if (wakeWordActiveRef.current && !recognitionRef.current) {
-          setTimeout(() => startWakeListener(), 500);
+        if (wakeWordActiveRef.current) {
+          setTimeout(() => startWakeListener(), 300);
         }
       };
       wakeListenerRef.current = wakeRec;
@@ -1376,34 +1450,50 @@ export default function App() {
           </div>
         </div>
 
-        {/* Status bar */}
-        <div
-          className="hidden md:flex items-center gap-3 px-4 py-2 tech-font"
-          style={{
-            background: "oklch(0.09 0.015 75 / 0.7)",
-            border: "1px solid oklch(0.78 0.15 75 / 0.2)",
-          }}
-        >
-          <span
-            className="text-[10px] tracking-widest uppercase"
-            style={{ color: "oklch(0.5 0.04 75)" }}
+        {/* Status bar + Live Clock */}
+        <div className="hidden md:flex flex-col items-center gap-1">
+          <div
+            className="flex items-center gap-3 px-4 py-2 tech-font"
+            style={{
+              background: "oklch(0.09 0.015 75 / 0.7)",
+              border: "1px solid oklch(0.78 0.15 75 / 0.2)",
+            }}
           >
-            MARK XLVII
-          </span>
-          <span style={{ color: "oklch(0.3 0.05 75)" }}>•</span>
-          <span
-            className="text-[10px] tracking-widest uppercase hud-blink"
-            style={{ color: "oklch(0.7 0.18 145)" }}
-          >
-            ONLINE
-          </span>
-          <span style={{ color: "oklch(0.3 0.05 75)" }}>•</span>
-          <span
-            className="text-[10px] tracking-widest uppercase"
-            style={{ color: "oklch(0.78 0.15 75)" }}
-          >
-            POWER: 100%
-          </span>
+            <span
+              className="text-[10px] tracking-widest uppercase"
+              style={{ color: "oklch(0.5 0.04 75)" }}
+            >
+              MARK XLVII
+            </span>
+            <span style={{ color: "oklch(0.3 0.05 75)" }}>•</span>
+            <span
+              className="text-[10px] tracking-widest uppercase hud-blink"
+              style={{ color: "oklch(0.7 0.18 145)" }}
+            >
+              ONLINE
+            </span>
+            <span style={{ color: "oklch(0.3 0.05 75)" }}>•</span>
+            <span
+              className="text-[10px] tracking-widest uppercase"
+              style={{ color: "oklch(0.78 0.15 75)" }}
+            >
+              POWER: 100%
+            </span>
+          </div>
+          {liveTime && (
+            <div
+              className="text-[10px] tracking-widest uppercase tech-font px-3 py-1"
+              style={{
+                color: "oklch(0.78 0.15 75)",
+                textShadow: "0 0 8px oklch(0.78 0.15 75 / 0.6)",
+                background: "oklch(0.09 0.015 75 / 0.5)",
+                border: "1px solid oklch(0.78 0.15 75 / 0.15)",
+                letterSpacing: "0.15em",
+              }}
+            >
+              {liveTime}
+            </div>
+          )}
         </div>
 
         {/* CTAs */}
@@ -1609,6 +1699,104 @@ export default function App() {
                       JARVIS DETECTED!
                     </span>
                   )}
+                </div>
+
+                {/* Voice status message */}
+                {voiceStatus && (
+                  <div
+                    className="text-[10px] tracking-widest uppercase tech-font text-center px-3 py-1 mt-1"
+                    style={{
+                      color: "oklch(0.65 0.25 25)",
+                      textShadow: "0 0 8px oklch(0.48 0.22 25 / 0.6)",
+                      background: "oklch(0.48 0.22 25 / 0.08)",
+                      border: "1px solid oklch(0.48 0.22 25 / 0.3)",
+                    }}
+                  >
+                    {voiceStatus}
+                  </div>
+                )}
+
+                {/* Thinking animation */}
+                {isSending && (
+                  <div
+                    className="flex items-center gap-2 px-4 py-2 tech-font processing-pulse"
+                    style={{
+                      background: "oklch(0.78 0.15 75 / 0.06)",
+                      border: "1px solid oklch(0.78 0.15 75 / 0.3)",
+                      color: "oklch(0.78 0.15 75)",
+                    }}
+                  >
+                    <span className="flex gap-1">
+                      {[0, 1, 2].map((i) => (
+                        <span
+                          key={i}
+                          className="w-1.5 h-1.5 rounded-full"
+                          style={{
+                            background: "oklch(0.78 0.15 75)",
+                            animation: `processing-dot 1.2s ease-in-out ${i * 0.2}s infinite`,
+                          }}
+                        />
+                      ))}
+                    </span>
+                    <span className="text-[10px] tracking-[0.3em] uppercase">
+                      PROCESSING...
+                    </span>
+                  </div>
+                )}
+
+                {/* Quick action buttons */}
+                <div className="flex gap-2 flex-wrap justify-center mt-1">
+                  {[
+                    {
+                      label: "NEWS",
+                      query: "What are the top news headlines right now today?",
+                    },
+                    {
+                      label: "WEATHER",
+                      query: "What is the current weather forecast today?",
+                    },
+                    {
+                      label: "SPORTS",
+                      query:
+                        "What are the latest sports scores and results today?",
+                    },
+                    {
+                      label: "TIME",
+                      query: "What is the current date and time right now?",
+                    },
+                  ].map(({ label, query }) => (
+                    <button
+                      key={label}
+                      type="button"
+                      data-ocid={`quick.${label.toLowerCase()}.button`}
+                      disabled={isSending}
+                      onClick={() => {
+                        setVoiceStatus("");
+                        sendMessage(query);
+                      }}
+                      className="px-3 py-1 text-[10px] font-bold tracking-[0.2em] uppercase tech-font transition-all hover:scale-105 active:scale-95 disabled:opacity-40"
+                      style={{
+                        background: "oklch(0.78 0.15 75 / 0.08)",
+                        border: "1px solid oklch(0.78 0.15 75 / 0.4)",
+                        color: "oklch(0.78 0.15 75)",
+                        boxShadow: "0 0 8px oklch(0.78 0.15 75 / 0.15)",
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.boxShadow =
+                          "0 0 16px oklch(0.78 0.15 75 / 0.5)";
+                        (e.currentTarget as HTMLElement).style.background =
+                          "oklch(0.78 0.15 75 / 0.18)";
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.boxShadow =
+                          "0 0 8px oklch(0.78 0.15 75 / 0.15)";
+                        (e.currentTarget as HTMLElement).style.background =
+                          "oklch(0.78 0.15 75 / 0.08)";
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
 
                 {/* Text input fallback */}

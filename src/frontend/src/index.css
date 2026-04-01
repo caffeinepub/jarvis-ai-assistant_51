@@ -308,3 +308,32 @@
   );
   animation: scanline 8s linear infinite;
 }
+
+/* Processing/thinking animation */
+@keyframes processing-dot {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.processing-pulse {
+  animation: processing-glow 1.5s ease-in-out infinite;
+}
+
+@keyframes processing-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 8px oklch(0.78 0.15 75 / 0.2);
+  }
+  50% {
+    box-shadow: 0 0 20px oklch(0.78 0.15 75 / 0.5), 0 0 40px
+      oklch(0.78 0.15 75 / 0.2);
+  }
+}
