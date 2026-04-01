@@ -35,47 +35,85 @@ interface ChatMessage {
 // Free AI via Pollinations.ai — all models raced in parallel for max speed
 async function callGeminiAPI(query: string): Promise<string> {
   const nowStr = new Date().toISOString();
-  const systemPrompt = `You are YAC, an advanced AI assistant. Today is ${nowStr}. You have knowledge of current events, news, weather, sports, and stocks. Be direct, informative, and concise. Answer in under 150 words.`;
+  const systemPrompt = `You are YAC, an advanced AI assistant. Today is ${nowStr}. You have real-time knowledge of news, weather, sports, stocks, and current events. Be direct and concise. Answer in under 200 words.`;
 
-  const makePost = async (model: string): Promise<string> => {
-    const endpoints = [
-      "https://text.pollinations.ai/openai",
-      "https://api.pollinations.ai/v1/chat/completions",
-    ];
-    const body = JSON.stringify({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: query },
-      ],
-      model,
-      max_tokens: 400,
-      private: true,
-    });
-    for (const endpoint of endpoints) {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 10000);
-      try {
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
+  // GET endpoint — no CORS preflight, very reliable
+  const makeGet = async (model: string): Promise<string> => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 12000);
+    try {
+      const prompt = encodeURIComponent(
+        `${systemPrompt}\n\nUser: ${query}\n\nAssistant:`,
+      );
+      const res = await fetch(
+        `https://text.pollinations.ai/${prompt}?model=${model}&nologo=true`,
+        {
           signal: controller.signal,
-        });
-        clearTimeout(id);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const text = data?.choices?.[0]?.message?.content?.trim();
-        if (!text) throw new Error("Empty response");
-        return text;
-      } catch (e) {
-        clearTimeout(id);
-        if (endpoint === endpoints[endpoints.length - 1]) throw e;
-      }
+        },
+      );
+      clearTimeout(id);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (
+        text?.trim() &&
+        !text.trim().startsWith("{") &&
+        !text.trim().startsWith("<") &&
+        text.trim().length > 10
+      )
+        return text.trim();
+      throw new Error("Invalid response");
+    } catch (e) {
+      clearTimeout(id);
+      throw e;
     }
-    throw new Error("All endpoints failed");
   };
 
-  // Race all models in parallel — fastest wins
+  // POST endpoint
+  const makePost = async (model: string): Promise<string> => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch("https://text.pollinations.ai/openai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: query },
+          ],
+          model,
+          max_tokens: 400,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(id);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const text = data?.choices?.[0]?.message?.content?.trim();
+      if (!text) throw new Error("Empty response");
+      return text;
+    } catch (e) {
+      clearTimeout(id);
+      throw e;
+    }
+  };
+
+  // Race GET endpoints across all models first (fastest, most reliable)
+  try {
+    const result = await Promise.any([
+      makeGet("openai"),
+      makeGet("mistral"),
+      makeGet("llama"),
+      makeGet("openai-large"),
+      makeGet("phi"),
+      makeGet("gemma"),
+    ]);
+    if (result) return result;
+  } catch {
+    // GET attempts failed, try POST
+  }
+
+  // POST fallback
   try {
     const result = await Promise.any([
       makePost("openai"),
@@ -85,35 +123,10 @@ async function callGeminiAPI(query: string): Promise<string> {
     ]);
     if (result) return result;
   } catch {
-    // All parallel attempts failed, try GET fallback
+    // all failed
   }
 
-  // Final fallback: Pollinations GET
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 8000);
-    const prompt = encodeURIComponent(
-      `${systemPrompt}\n\nUser: ${query}\n\nAssistant:`,
-    );
-    const res = await fetch(`https://text.pollinations.ai/${prompt}`, {
-      headers: { Accept: "text/plain" },
-      signal: controller.signal,
-    });
-    clearTimeout(id);
-    if (res.ok) {
-      const text = await res.text();
-      if (
-        text?.trim() &&
-        !text.trim().startsWith("{") &&
-        !text.trim().startsWith("<")
-      )
-        return text.trim();
-    }
-  } catch (e) {
-    console.warn("Pollinations GET fallback failed:", e);
-  }
-
-  return "I am currently unable to reach external services. Please check your internet connection and try again.";
+  return "YAC systems offline. All AI endpoints are unreachable. Please try again in a moment.";
 }
 
 // ─── DuckDuckGo JSON parser ────────────────────────────────────────────────
