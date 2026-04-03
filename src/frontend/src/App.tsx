@@ -24,6 +24,52 @@ import { useActor } from "./hooks/useActor";
 import { useInternetIdentity } from "./hooks/useInternetIdentity";
 import { useGetAllMessages, useIsConnected } from "./hooks/useQueries";
 
+// ─── Network Time Sync ────────────────────────────────────────────────────────
+// Network time sync — offset between network UTC and device UTC (ms)
+let _networkTimeOffsetMs = 0;
+let _networkTimeSynced = false;
+
+async function syncNetworkTime(): Promise<void> {
+  try {
+    // Try WorldTimeAPI first (returns IST directly)
+    const res = await fetch(
+      "https://worldtimeapi.org/api/timezone/Asia/Kolkata",
+      { signal: AbortSignal.timeout(4000) },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      // data.unixtime is seconds since epoch (UTC)
+      const networkUtcMs = data.unixtime * 1000;
+      _networkTimeOffsetMs = networkUtcMs - Date.now();
+      _networkTimeSynced = true;
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    // Fallback: timeapi.io
+    const res2 = await fetch(
+      "https://timeapi.io/api/time/current/zone?timeZone=Asia%2FKolkata",
+      { signal: AbortSignal.timeout(4000) },
+    );
+    if (res2.ok) {
+      const d = await res2.json();
+      // d.dateTime is ISO string in IST
+      const networkUtcMs =
+        new Date(d.dateTime).getTime() - 5.5 * 60 * 60 * 1000;
+      _networkTimeOffsetMs = networkUtcMs - Date.now();
+      _networkTimeSynced = true;
+    }
+  } catch {
+    /* ignore, use device time */
+  }
+}
+
+function getNetworkAdjustedDate(): Date {
+  return new Date(Date.now() + _networkTimeOffsetMs);
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface ChatMessage {
   id: string;
@@ -82,7 +128,7 @@ async function checkConnectivity(): Promise<boolean> {
 
 // Free AI via Pollinations.ai — all models raced in parallel for max speed
 async function callYAC(query: string, modeHint?: string): Promise<string> {
-  const nowUtc = new Date();
+  const nowUtc = getNetworkAdjustedDate();
   const istMs =
     nowUtc.getTime() +
     5.5 * 60 * 60 * 1000 -
@@ -685,7 +731,7 @@ function SystemStatusPanel({
 
   useEffect(() => {
     const tick = () => {
-      const now = new Date();
+      const now = getNetworkAdjustedDate();
       const istOffset = 5.5 * 60 * 60 * 1000;
       const ist = new Date(
         now.getTime() + istOffset - now.getTimezoneOffset() * 60 * 1000,
@@ -1303,6 +1349,11 @@ export default function App() {
     };
   }, []);
 
+  // Sync network time on startup
+  useEffect(() => {
+    syncNetworkTime();
+  }, []);
+
   // Uptime counter
   useEffect(() => {
     const id = setInterval(() => {
@@ -1317,8 +1368,9 @@ export default function App() {
 
   // Live clock
   useEffect(() => {
+    syncNetworkTime();
     const tick = () => {
-      const now = new Date();
+      const now = getNetworkAdjustedDate();
       const istOffset = 5.5 * 60 * 60 * 1000;
       const ist = new Date(
         now.getTime() + istOffset - now.getTimezoneOffset() * 60 * 1000,
