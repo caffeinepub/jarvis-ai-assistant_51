@@ -224,6 +224,56 @@ async function callYAC(query: string, modeHint?: string): Promise<string> {
   return "YAC systems offline. All AI endpoints are unreachable. Please try again in a moment.";
 }
 
+// ─── Vision AI Backend ────────────────────────────────────────────────────────
+async function callVisionAI(
+  imageBase64: string,
+  question: string,
+): Promise<string> {
+  const VISION_MODELS = ["openai", "gpt-oss"];
+
+  const tryVisionPost = async (model: string): Promise<string> => {
+    const res = await fetch("https://text.pollinations.ai/openai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        max_tokens: 150,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are YAC, Iron Man's AI assistant. Analyze the image and respond in 1-2 concise sentences.",
+          },
+          {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: imageBase64 } },
+              { type: "text", text: question },
+            ],
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content?.trim();
+    if (!text) throw new Error("Empty response");
+    return text;
+  };
+
+  try {
+    const result = await Promise.any(
+      VISION_MODELS.map((m) => tryVisionPost(m)),
+    );
+    if (result) return result;
+  } catch {
+    /* all failed */
+  }
+
+  return "Visual scan failed. Unable to process image.";
+}
+
 // ─── Voice loader helper ──────────────────────────────────────────────────────
 function loadVoices(): Promise<SpeechSynthesisVoice[]> {
   return new Promise((resolve) => {
@@ -803,12 +853,16 @@ function SystemStatusPanel({
 // ─── Camera HUD Panel ─────────────────────────────────────────────────────────
 function CameraHudPanel({
   videoRef,
+  canvasRef,
   onScan,
   onClose,
+  scanning,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
   onScan: () => void;
   onClose: () => void;
+  scanning: boolean;
 }) {
   return (
     <motion.div
@@ -828,6 +882,9 @@ function CameraHudPanel({
     >
       <HudCorners color="oklch(0.78 0.15 75 / 0.8)" size={14} />
 
+      {/* Hidden canvas for frame capture */}
+      <canvas ref={canvasRef} style={{ display: "none" }} />
+
       {/* Header */}
       <div
         className="flex items-center justify-between px-3 py-2"
@@ -846,6 +903,27 @@ function CameraHudPanel({
             style={{ color: "oklch(0.78 0.15 75)" }}
           >
             CAM FEED
+          </span>
+          {/* AUTO LIVE badge */}
+          <span
+            className="flex items-center gap-1 px-1.5 py-0.5"
+            style={{
+              background: "oklch(0.78 0.15 75 / 0.12)",
+              border: "1px solid oklch(0.78 0.15 75 / 0.4)",
+              fontSize: 8,
+              letterSpacing: "0.15em",
+              color: "oklch(0.78 0.15 75)",
+              fontFamily: "monospace",
+            }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full hud-blink"
+              style={{
+                background: "oklch(0.78 0.15 75)",
+                boxShadow: "0 0 4px oklch(0.78 0.15 75)",
+              }}
+            />
+            AUTO · LIVE
           </span>
         </div>
         <button
@@ -947,6 +1025,23 @@ function CameraHudPanel({
             REC
           </span>
         </div>
+        {/* Scanning overlay */}
+        {scanning && (
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
+            style={{ background: "oklch(0.78 0.15 75 / 0.15)" }}
+          >
+            <span
+              className="text-[11px] font-bold tracking-[0.3em] uppercase tech-font hud-blink"
+              style={{
+                color: "oklch(0.78 0.15 75)",
+                textShadow: "0 0 12px oklch(0.78 0.15 75)",
+              }}
+            >
+              ⬡ SCANNING...
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Scan button */}
@@ -955,27 +1050,34 @@ function CameraHudPanel({
           type="button"
           data-ocid="camera.scan.button"
           onClick={onScan}
-          className="w-full py-1.5 text-[10px] font-bold tracking-[0.3em] uppercase tech-font transition-all hover:scale-105 active:scale-95"
+          disabled={scanning}
+          className="w-full py-1.5 text-[10px] font-bold tracking-[0.3em] uppercase tech-font transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
           style={{
-            background: "oklch(0.78 0.15 75 / 0.1)",
+            background: scanning
+              ? "oklch(0.78 0.15 75 / 0.2)"
+              : "oklch(0.78 0.15 75 / 0.1)",
             border: "1px solid oklch(0.78 0.15 75 / 0.5)",
             color: "oklch(0.78 0.15 75)",
             boxShadow: "0 0 10px oklch(0.78 0.15 75 / 0.15)",
           }}
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLElement).style.background =
-              "oklch(0.78 0.15 75 / 0.2)";
-            (e.currentTarget as HTMLElement).style.boxShadow =
-              "0 0 20px oklch(0.78 0.15 75 / 0.4)";
+            if (!scanning) {
+              (e.currentTarget as HTMLElement).style.background =
+                "oklch(0.78 0.15 75 / 0.2)";
+              (e.currentTarget as HTMLElement).style.boxShadow =
+                "0 0 20px oklch(0.78 0.15 75 / 0.4)";
+            }
           }}
           onMouseLeave={(e) => {
-            (e.currentTarget as HTMLElement).style.background =
-              "oklch(0.78 0.15 75 / 0.1)";
-            (e.currentTarget as HTMLElement).style.boxShadow =
-              "0 0 10px oklch(0.78 0.15 75 / 0.15)";
+            if (!scanning) {
+              (e.currentTarget as HTMLElement).style.background =
+                "oklch(0.78 0.15 75 / 0.1)";
+              (e.currentTarget as HTMLElement).style.boxShadow =
+                "0 0 10px oklch(0.78 0.15 75 / 0.15)";
+            }
           }}
         >
-          ⬡ INITIATE VISUAL SCAN
+          {scanning ? "⬡ SCANNING..." : "⬡ INITIATE VISUAL SCAN"}
         </button>
       </div>
     </motion.div>
@@ -1293,6 +1395,9 @@ export default function App() {
   const [cameraOn, setCameraOn] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [scanning, setScanning] = useState(false);
+  const lastScanDescRef = useRef<string>("");
 
   const recognitionRef = useRef<any>(null);
   const toggleListeningRef = useRef<(() => void) | null>(null);
@@ -1846,13 +1951,108 @@ export default function App() {
     if (e.key === "Enter") sendMessage(textInput);
   };
 
+  // Capture a frame from the video element as a base64 JPEG
+  const captureFrameAsBase64 = useCallback((): string | null => {
+    if (!videoRef.current || !canvasRef.current) return null;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = 320;
+    canvas.height = 240;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, 320, 240);
+    return canvas.toDataURL("image/jpeg", 0.7);
+  }, []);
+
   // Bind handleCameraScan to sendMessage after it's defined
-  const handleCameraScanBound = useCallback(() => {
-    if (!videoRef.current || !cameraOn) return;
-    sendMessage(
-      "Describe what you see in my camera feed right now. Provide a brief visual analysis.",
-    );
-  }, [cameraOn, sendMessage]);
+  const handleCameraScanBound = useCallback(async () => {
+    if (!videoRef.current || !cameraOn || scanning) return;
+    const imageData = captureFrameAsBase64();
+    if (!imageData) return;
+
+    setScanning(true);
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: "📸 [Visual Scan Initiated]",
+      timestamp: Date.now(),
+    };
+    const pendingId = `pending-${Date.now()}`;
+    const pendingMsg: ChatMessage = {
+      id: pendingId,
+      role: "assistant",
+      content: "Analyzing visual feed...",
+      pending: true,
+      timestamp: Date.now(),
+    };
+    setChatMessages((prev) => [...prev, userMsg, pendingMsg]);
+
+    try {
+      const result = await callVisionAI(
+        imageData,
+        "What do you see in this image? Describe it briefly in 1-2 sentences.",
+      );
+      const responseMsg: ChatMessage = {
+        id: `jarvis-${Date.now()}`,
+        role: "assistant",
+        content: result,
+        timestamp: Date.now(),
+      };
+      setChatMessages((prev) =>
+        prev.filter((m) => m.id !== pendingId).concat(responseMsg),
+      );
+      speakText(result);
+    } catch {
+      setChatMessages((prev) =>
+        prev
+          .filter((m) => m.id !== pendingId)
+          .concat({
+            id: `jarvis-${Date.now()}`,
+            role: "assistant",
+            content: "Visual scan failed. Unable to process image.",
+            timestamp: Date.now(),
+          }),
+      );
+    } finally {
+      setScanning(false);
+    }
+  }, [cameraOn, scanning, captureFrameAsBase64, speakText]);
+
+  // Auto-scan effect: when camera is on, automatically scan every 8 seconds
+  useEffect(() => {
+    if (!cameraOn) return;
+    const interval = setInterval(async () => {
+      if (scanning) return;
+      const imageData = captureFrameAsBase64();
+      if (!imageData) return;
+      try {
+        const result = await callVisionAI(
+          imageData,
+          "Briefly describe what you see in one sentence. Be specific about objects, people, or text visible.",
+        );
+        if (
+          result &&
+          result !== lastScanDescRef.current &&
+          !result.toLowerCase().includes("failed")
+        ) {
+          lastScanDescRef.current = result;
+          const autoMsg: ChatMessage = {
+            id: `auto-${Date.now()}`,
+            role: "assistant",
+            content: `👁 Auto-scan: ${result}`,
+            timestamp: Date.now(),
+          };
+          setChatMessages((prev) => [...prev, autoMsg]);
+          if (!window.speechSynthesis.speaking) {
+            speakText(result);
+          }
+        }
+      } catch {
+        /* silent fail for auto-scan */
+      }
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [cameraOn, scanning, captureFrameAsBase64, speakText]);
 
   const features = [
     {
@@ -1949,8 +2149,10 @@ export default function App() {
         {cameraOn && (
           <CameraHudPanel
             videoRef={videoRef}
+            canvasRef={canvasRef}
             onScan={handleCameraScanBound}
             onClose={toggleCamera}
+            scanning={scanning}
           />
         )}
       </AnimatePresence>
