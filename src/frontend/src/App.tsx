@@ -4,6 +4,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Brain,
+  Camera,
   ChevronRight,
   Globe,
   LogOut,
@@ -32,15 +33,51 @@ interface ChatMessage {
   timestamp: number;
 }
 
+// ─── Emotion Detection ───────────────────────────────────────────────────────
+function detectEmotion(text: string): string {
+  const lower = text.toLowerCase();
+  if (
+    /\b(urgent|emergency|now|asap|help|sos|critical|immediately)\b/.test(lower)
+  )
+    return "urgent";
+  if (
+    /\b(happy|great|awesome|love|excited|wonderful|amazing|fantastic)\b/.test(
+      lower,
+    )
+  )
+    return "positive";
+  if (
+    /\b(why|how|what|explain|curious|tell me|describe|understand)\b/.test(lower)
+  )
+    return "curious";
+  return "neutral";
+}
+
+// ─── Language Detection ───────────────────────────────────────────────────────
+function needsMultilingualHint(text: string): boolean {
+  let nonAscii = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) > 127) nonAscii++;
+  }
+  return text.length > 0 && nonAscii / text.length > 0.2;
+}
+
 // Free AI via Pollinations.ai — all models raced in parallel for max speed
-async function callGeminiAPI(query: string): Promise<string> {
+async function callGeminiAPI(
+  query: string,
+  modeHint?: string,
+): Promise<string> {
   const nowStr = new Date().toISOString();
-  const systemPrompt = `You are YAC, an advanced AI assistant. Today is ${nowStr}. You have real-time knowledge of news, weather, sports, stocks, and current events. Be direct and concise. Answer in under 200 words.`;
+  let systemPrompt = `You are YAC, an advanced Iron Man-style AI assistant. Today is ${nowStr}. You have real-time knowledge of news, weather, sports, stocks, and current events. Be direct and concise. Answer in under 200 words.`;
+
+  if (modeHint) {
+    systemPrompt += ` ${modeHint}`;
+  }
 
   // GET endpoint — no CORS preflight, very reliable
   const makeGet = async (model: string): Promise<string> => {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 12000);
+    const id = setTimeout(() => controller.abort(), 5000);
     try {
       const prompt = encodeURIComponent(
         `${systemPrompt}\n\nUser: ${query}\n\nAssistant:`,
@@ -71,7 +108,7 @@ async function callGeminiAPI(query: string): Promise<string> {
   // POST endpoint
   const makePost = async (model: string): Promise<string> => {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 12000);
+    const id = setTimeout(() => controller.abort(), 5000);
     try {
       const res = await fetch("https://text.pollinations.ai/openai", {
         method: "POST",
@@ -98,7 +135,7 @@ async function callGeminiAPI(query: string): Promise<string> {
     }
   };
 
-  // Race GET endpoints across all models first (fastest, most reliable)
+  // Race GET endpoints across 9 models in parallel (fastest, most reliable)
   try {
     const result = await Promise.any([
       makeGet("openai"),
@@ -107,6 +144,9 @@ async function callGeminiAPI(query: string): Promise<string> {
       makeGet("openai-large"),
       makeGet("phi"),
       makeGet("gemma"),
+      makeGet("claude"),
+      makeGet("command-r"),
+      makeGet("qwen-coder"),
     ]);
     if (result) return result;
   } catch {
@@ -362,7 +402,6 @@ function ArcReactorOrb({ listening }: { listening: boolean }) {
             const angle = (i * 360) / 12;
             const rad = (angle * Math.PI) / 180;
             const r1 = 99;
-            const _r2 = 92;
             return (
               <rect
                 key={angle}
@@ -617,10 +656,12 @@ function SystemStatusPanel({
   connected,
   messageCount,
   uptime,
+  cameraOn,
 }: {
   connected: boolean;
   messageCount: number;
   uptime: string;
+  cameraOn: boolean;
 }) {
   const [currentTime, setCurrentTime] = useState("");
 
@@ -650,13 +691,19 @@ function SystemStatusPanel({
     { label: "UPTIME", value: uptime, color: "oklch(0.65 0.18 220)" },
     { label: "STATUS", value: "OPERATIONAL", color: "oklch(0.7 0.18 145)" },
     { label: "POWER", value: "100%", color: "oklch(0.78 0.15 75)" },
+    {
+      label: "CAMERA",
+      value: cameraOn ? "ACTIVE" : "OFFLINE",
+      color: cameraOn ? "oklch(0.78 0.15 75)" : "oklch(0.45 0.15 25)",
+      dot: true,
+    },
   ];
 
   return (
     <div
       data-ocid="hud.panel"
       className="iron-panel rounded-lg p-4 w-full hud-brackets"
-      style={{ height: 320, position: "relative" }}
+      style={{ height: 360, position: "relative" }}
     >
       <div className="flex items-center gap-2 mb-4">
         <Brain size={14} style={{ color: "oklch(0.72 0.18 220)" }} />
@@ -711,6 +758,188 @@ function SystemStatusPanel({
         MARK XLVII ● ONLINE ● YAC INDUSTRIES
       </div>
     </div>
+  );
+}
+
+// ─── Camera HUD Panel ─────────────────────────────────────────────────────────
+function CameraHudPanel({
+  videoRef,
+  onScan,
+  onClose,
+}: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  onScan: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.9, y: 20 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.9, y: 20 }}
+      transition={{ duration: 0.3 }}
+      data-ocid="camera.panel"
+      className="fixed bottom-6 right-6 z-50"
+      style={{
+        width: 280,
+        background: "oklch(0.06 0.01 220 / 0.95)",
+        border: "1px solid oklch(0.78 0.15 75 / 0.6)",
+        boxShadow:
+          "0 0 30px oklch(0.78 0.15 75 / 0.2), 0 0 60px oklch(0.78 0.15 75 / 0.1)",
+      }}
+    >
+      <HudCorners color="oklch(0.78 0.15 75 / 0.8)" size={14} />
+
+      {/* Header */}
+      <div
+        className="flex items-center justify-between px-3 py-2"
+        style={{ borderBottom: "1px solid oklch(0.78 0.15 75 / 0.2)" }}
+      >
+        <div className="flex items-center gap-2">
+          <span
+            className="w-2 h-2 rounded-full hud-blink"
+            style={{
+              background: "oklch(0.65 0.25 25)",
+              boxShadow: "0 0 6px oklch(0.65 0.25 25)",
+            }}
+          />
+          <span
+            className="text-[10px] font-bold tracking-[0.3em] uppercase tech-font"
+            style={{ color: "oklch(0.78 0.15 75)" }}
+          >
+            CAM FEED
+          </span>
+        </div>
+        <button
+          type="button"
+          data-ocid="camera.close_button"
+          onClick={onClose}
+          className="text-[10px] tracking-widest uppercase tech-font px-2 py-0.5 transition-all hover:opacity-70"
+          style={{
+            color: "oklch(0.65 0.25 25)",
+            border: "1px solid oklch(0.65 0.25 25 / 0.4)",
+          }}
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* Video feed with scan-line overlay */}
+      <div className="relative" style={{ lineHeight: 0 }}>
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{
+            width: "100%",
+            display: "block",
+            maxHeight: 200,
+            objectFit: "cover",
+          }}
+        />
+        {/* Scan-line overlay */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background:
+              "repeating-linear-gradient(0deg, transparent, transparent 2px, oklch(0 0 0 / 0.15) 2px, oklch(0 0 0 / 0.15) 4px)",
+          }}
+        />
+        {/* Scan sweep animation */}
+        <div
+          className="absolute inset-x-0 pointer-events-none cam-scan-sweep"
+          style={{
+            height: 2,
+            background:
+              "linear-gradient(90deg, transparent, oklch(0.78 0.15 75 / 0.7), transparent)",
+            top: 0,
+          }}
+        />
+        {/* Corner HUD overlays inside video */}
+        <div
+          className="absolute top-2 left-2"
+          style={{
+            width: 16,
+            height: 16,
+            borderTop: "1px solid oklch(0.78 0.15 75 / 0.7)",
+            borderLeft: "1px solid oklch(0.78 0.15 75 / 0.7)",
+          }}
+        />
+        <div
+          className="absolute top-2 right-2"
+          style={{
+            width: 16,
+            height: 16,
+            borderTop: "1px solid oklch(0.78 0.15 75 / 0.7)",
+            borderRight: "1px solid oklch(0.78 0.15 75 / 0.7)",
+          }}
+        />
+        <div
+          className="absolute bottom-2 left-2"
+          style={{
+            width: 16,
+            height: 16,
+            borderBottom: "1px solid oklch(0.78 0.15 75 / 0.7)",
+            borderLeft: "1px solid oklch(0.78 0.15 75 / 0.7)",
+          }}
+        />
+        <div
+          className="absolute bottom-2 right-2"
+          style={{
+            width: 16,
+            height: 16,
+            borderBottom: "1px solid oklch(0.78 0.15 75 / 0.7)",
+            borderRight: "1px solid oklch(0.78 0.15 75 / 0.7)",
+          }}
+        />
+        {/* REC indicator */}
+        <div className="absolute top-2 right-8 flex items-center gap-1">
+          <span
+            className="w-1.5 h-1.5 rounded-full"
+            style={{
+              background: "oklch(0.65 0.25 25)",
+              animation: "pulse 1s ease-in-out infinite",
+            }}
+          />
+          <span
+            className="text-[8px] font-bold tracking-widest tech-font"
+            style={{ color: "oklch(0.65 0.25 25)" }}
+          >
+            REC
+          </span>
+        </div>
+      </div>
+
+      {/* Scan button */}
+      <div className="px-3 py-2">
+        <button
+          type="button"
+          data-ocid="camera.scan.button"
+          onClick={onScan}
+          className="w-full py-1.5 text-[10px] font-bold tracking-[0.3em] uppercase tech-font transition-all hover:scale-105 active:scale-95"
+          style={{
+            background: "oklch(0.78 0.15 75 / 0.1)",
+            border: "1px solid oklch(0.78 0.15 75 / 0.5)",
+            color: "oklch(0.78 0.15 75)",
+            boxShadow: "0 0 10px oklch(0.78 0.15 75 / 0.15)",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.background =
+              "oklch(0.78 0.15 75 / 0.2)";
+            (e.currentTarget as HTMLElement).style.boxShadow =
+              "0 0 20px oklch(0.78 0.15 75 / 0.4)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.background =
+              "oklch(0.78 0.15 75 / 0.1)";
+            (e.currentTarget as HTMLElement).style.boxShadow =
+              "0 0 10px oklch(0.78 0.15 75 / 0.15)";
+          }}
+        >
+          ⬡ INITIATE VISUAL SCAN
+        </button>
+      </div>
+    </motion.div>
   );
 }
 
@@ -1020,7 +1249,13 @@ export default function App() {
   const [startTime] = useState(Date.now());
   const [uptime, setUptime] = useState("00:00:00");
 
+  // Camera state
+  const [cameraOn, setCameraOn] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+
   const recognitionRef = useRef<any>(null);
+  const retryCountRef = useRef(0);
   const [wakeWordActive, setWakeWordActive] = useState(false);
   const [wakeWordDetected, setWakeWordDetected] = useState(false);
   const wakeListenerRef = useRef<any>(null);
@@ -1105,6 +1340,52 @@ export default function App() {
     setChatMessages(seeded);
   }, [remoteMessages]);
 
+  // ─── Camera Controls ─────────────────────────────────────────────────────
+  const toggleCamera = useCallback(async () => {
+    if (cameraOn) {
+      // Turn off camera
+      for (const t of cameraStreamRef.current?.getTracks() ?? []) {
+        t.stop();
+      }
+      cameraStreamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      setCameraOn(false);
+    } else {
+      // Turn on camera
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+        cameraStreamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setCameraOn(true);
+        setVoiceStatus("");
+      } catch (err: any) {
+        const msg =
+          err?.name === "NotAllowedError"
+            ? "CAMERA ACCESS DENIED - CHECK BROWSER SETTINGS"
+            : err?.name === "NotFoundError"
+              ? "NO CAMERA FOUND"
+              : "CAMERA ERROR - TRY AGAIN";
+        setVoiceStatus(msg);
+      }
+    }
+  }, [cameraOn]);
+
+  // Cleanup camera on unmount
+  useEffect(() => {
+    return () => {
+      for (const t of cameraStreamRef.current?.getTracks() ?? []) {
+        t.stop();
+      }
+    };
+  }, []);
+
+  // handleCameraScan is defined below after sendMessage is available
+
   const speakText = useCallback(async (text: string) => {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
@@ -1138,6 +1419,35 @@ export default function App() {
     async (text: string) => {
       if (!text.trim() || isSending) return;
       setIsSending(true);
+
+      // Detect command shortcuts
+      const lower = text.toLowerCase().trim();
+      let modeHint: string | undefined;
+      if (lower.startsWith("calculate ")) {
+        modeHint =
+          "You are in calculator mode. Be precise and show your steps.";
+      } else if (lower.startsWith("translate ")) {
+        modeHint =
+          "You are in translation mode. Translate accurately and provide the translation.";
+      } else if (lower.startsWith("summarize ")) {
+        modeHint = "You are in summary mode. Be concise and use bullet points.";
+      }
+
+      // Emotion/tone detection
+      const emotion = detectEmotion(text);
+      if (emotion === "urgent") {
+        modeHint = `${modeHint ?? ""} The user seems urgent — prioritize the most important information first.`;
+      } else if (emotion === "positive") {
+        modeHint = `${modeHint ?? ""} The user is in a positive mood — match the energy with an upbeat tone.`;
+      } else if (emotion === "curious") {
+        modeHint = `${modeHint ?? ""} The user is curious — provide clear, educational explanations.`;
+      }
+
+      // Language detection
+      if (needsMultilingualHint(text)) {
+        modeHint = `${modeHint ?? ""} Respond in the same language as the user.`;
+      }
+
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
         role: "user",
@@ -1155,7 +1465,7 @@ export default function App() {
       setChatMessages((prev) => [...prev, userMsg, pendingMsg]);
       setTextInput("");
       try {
-        const response = await callGeminiAPI(text.trim());
+        const response = await callGeminiAPI(text.trim(), modeHint);
         const responseMsg: ChatMessage = {
           id: `jarvis-${Date.now()}`,
           role: "assistant",
@@ -1208,6 +1518,7 @@ export default function App() {
     let resultReceived = false;
     recognition.onresult = (event: any) => {
       resultReceived = true;
+      retryCountRef.current = 0;
       const transcript = event.results[0][0].transcript;
       setListening(false);
       sendMessage(transcript);
@@ -1217,14 +1528,31 @@ export default function App() {
       const errorCode = event?.error || "";
       if (errorCode === "not-allowed" || errorCode === "permission-denied") {
         setVoiceStatus("MICROPHONE ACCESS DENIED - CHECK BROWSER SETTINGS");
+        retryCountRef.current = 0;
       } else if (errorCode === "no-speech") {
         setVoiceStatus("NO SPEECH DETECTED - TRY AGAIN");
+        retryCountRef.current = 0;
       } else if (errorCode === "network") {
         setVoiceStatus("NETWORK ERROR - CHECK CONNECTION");
+        // Auto-retry once on network error
+        if (retryCountRef.current < 1) {
+          retryCountRef.current += 1;
+          setTimeout(() => toggleListening(), 500);
+        } else {
+          retryCountRef.current = 0;
+        }
       } else if (errorCode === "aborted") {
         setVoiceStatus("LISTENING STOPPED");
+        retryCountRef.current = 0;
       } else {
         setVoiceStatus("VOICE ERROR - TRY AGAIN");
+        // Auto-retry once on generic error
+        if (retryCountRef.current < 1) {
+          retryCountRef.current += 1;
+          setTimeout(() => toggleListening(), 500);
+        } else {
+          retryCountRef.current = 0;
+        }
       }
       if (wakeWordActiveRef.current) {
         setTimeout(() => startWakeListener(), 500);
@@ -1335,6 +1663,14 @@ export default function App() {
     if (e.key === "Enter") sendMessage(textInput);
   };
 
+  // Bind handleCameraScan to sendMessage after it's defined
+  const handleCameraScanBound = useCallback(() => {
+    if (!videoRef.current || !cameraOn) return;
+    sendMessage(
+      "Describe what you see in my camera feed right now. Provide a brief visual analysis.",
+    );
+  }, [cameraOn, sendMessage]);
+
   const features = [
     {
       icon: <Mic size={22} />,
@@ -1350,6 +1686,11 @@ export default function App() {
       icon: <Sparkles size={22} />,
       title: "AI Processing",
       desc: "Advanced AI reasoning delivers context-aware, intelligent responses instantly. Powered by the YAC Intelligence Framework.",
+    },
+    {
+      icon: <Camera size={22} />,
+      title: "Visual Scan",
+      desc: "Activate the camera feed for live surveillance mode. Initiate a visual scan and J.A.R.V.I.S. will analyze what the camera sees.",
     },
   ];
 
@@ -1420,6 +1761,17 @@ export default function App() {
         }}
       />
 
+      {/* ─── Camera HUD Panel (floating overlay) ──────────────────────── */}
+      <AnimatePresence>
+        {cameraOn && (
+          <CameraHudPanel
+            videoRef={videoRef}
+            onScan={handleCameraScanBound}
+            onClose={toggleCamera}
+          />
+        )}
+      </AnimatePresence>
+
       {/* ─── Header ─────────────────────────────────────────────────────── */}
       <header
         className="sticky top-0 z-50 flex items-center justify-between px-6 py-3"
@@ -1432,70 +1784,31 @@ export default function App() {
       >
         {/* Brand */}
         <div className="flex items-center gap-3">
-          <div
-            className="flex items-center justify-center w-9 h-9"
-            style={{
-              background: "oklch(0.78 0.15 75 / 0.12)",
-              border: "1px solid oklch(0.78 0.15 75 / 0.5)",
-              boxShadow: "0 0 16px oklch(0.78 0.15 75 / 0.35)",
-              clipPath:
-                "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
-            }}
-          >
-            <Zap size={16} style={{ color: "oklch(0.78 0.15 75)" }} />
-          </div>
-          <div className="flex flex-col leading-none">
+          <Zap size={18} style={{ color: "oklch(0.78 0.15 75)" }} />
+          <div className="flex flex-col">
             <span
-              className="text-lg font-black tracking-[0.2em] uppercase tech-font"
+              className="text-sm font-black tracking-[0.2em] uppercase tech-font"
               style={{
                 color: "oklch(0.78 0.15 75)",
-                textShadow: "0 0 16px oklch(0.78 0.15 75 / 0.6)",
+                textShadow: "0 0 12px oklch(0.78 0.15 75 / 0.5)",
               }}
             >
               J.A.R.V.I.S.
             </span>
             <span
-              className="text-[9px] tracking-[0.3em] uppercase tech-font"
-              style={{ color: "oklch(0.48 0.06 75)" }}
+              className="text-[8px] tracking-[0.3em] uppercase tech-font"
+              style={{ color: "oklch(0.45 0.06 75)" }}
             >
-              YAC INDUSTRIES
+              YAC AI SYSTEM
             </span>
           </div>
         </div>
 
-        {/* Status bar + Live Clock */}
-        <div className="hidden md:flex flex-col items-center gap-1">
-          <div
-            className="flex items-center gap-3 px-4 py-2 tech-font"
-            style={{
-              background: "oklch(0.09 0.015 75 / 0.7)",
-              border: "1px solid oklch(0.78 0.15 75 / 0.2)",
-            }}
-          >
-            <span
-              className="text-[10px] tracking-widest uppercase"
-              style={{ color: "oklch(0.5 0.04 75)" }}
-            >
-              MARK XLVII
-            </span>
-            <span style={{ color: "oklch(0.3 0.05 75)" }}>•</span>
-            <span
-              className="text-[10px] tracking-widest uppercase hud-blink"
-              style={{ color: "oklch(0.7 0.18 145)" }}
-            >
-              ONLINE
-            </span>
-            <span style={{ color: "oklch(0.3 0.05 75)" }}>•</span>
-            <span
-              className="text-[10px] tracking-widest uppercase"
-              style={{ color: "oklch(0.78 0.15 75)" }}
-            >
-              POWER: 100%
-            </span>
-          </div>
+        {/* Live clock */}
+        <div className="hidden md:flex items-center gap-3">
           {liveTime && (
             <div
-              className="text-[10px] tracking-widest uppercase tech-font px-3 py-1"
+              className="px-3 py-1 text-xs tech-font tracking-widest"
               style={{
                 color: "oklch(0.78 0.15 75)",
                 textShadow: "0 0 8px oklch(0.78 0.15 75 / 0.6)",
@@ -1660,8 +1973,8 @@ export default function App() {
 
                 <Waveform listening={listening} />
 
-                {/* Wake word toggle */}
-                <div className="flex items-center gap-2 mt-1">
+                {/* Wake word toggle + Camera toggle row */}
+                <div className="flex items-center gap-2 mt-1 flex-wrap justify-center">
                   <button
                     type="button"
                     data-ocid="jarvis.wake_word.toggle"
@@ -1699,8 +2012,32 @@ export default function App() {
                             : "none",
                       }}
                     />
-                    WAKE WORD: {wakeWordActive ? "ON" : "OFF"}
+                    WAKE: {wakeWordActive ? "ON" : "OFF"}
                   </button>
+
+                  {/* Camera toggle button */}
+                  <button
+                    type="button"
+                    data-ocid="camera.toggle"
+                    onClick={toggleCamera}
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold tracking-widest uppercase transition-all hover:scale-105 active:scale-95 tech-font"
+                    style={{
+                      background: cameraOn
+                        ? "oklch(0.48 0.22 25 / 0.2)"
+                        : "oklch(0.09 0.015 75)",
+                      border: `1px solid ${cameraOn ? "oklch(0.48 0.22 25 / 0.7)" : "oklch(0.22 0.04 75 / 0.6)"}`,
+                      color: cameraOn
+                        ? "oklch(0.7 0.22 25)"
+                        : "oklch(0.5 0.06 75)",
+                      boxShadow: cameraOn
+                        ? "0 0 14px oklch(0.48 0.22 25 / 0.4)"
+                        : "none",
+                    }}
+                  >
+                    <Camera size={12} />
+                    CAM {cameraOn ? "ON" : "OFF"}
+                  </button>
+
                   {wakeWordDetected && (
                     <span
                       className="text-xs font-bold tracking-widest uppercase tech-font animate-pulse"
@@ -1865,6 +2202,7 @@ export default function App() {
                   chatMessages.filter((m) => m.role === "user").length
                 }
                 uptime={uptime}
+                cameraOn={cameraOn}
               />
             </motion.div>
           </div>
@@ -1878,6 +2216,7 @@ export default function App() {
                 chatMessages.filter((m) => m.role === "user").length
               }
               uptime={uptime}
+              cameraOn={cameraOn}
             />
           </div>
         </section>
@@ -1919,7 +2258,7 @@ export default function App() {
               </p>
             </motion.div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               {features.map((f, i) => (
                 <motion.div
                   key={f.title}

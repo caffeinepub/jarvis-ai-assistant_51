@@ -337,3 +337,17 @@
       oklch(0.78 0.15 75 / 0.2);
   }
 }
+
+/* Camera scan sweep animation */
+@keyframes cam-scan-sweep {
+  0% {
+    top: 0%;
+  }
+  100% {
+    top: 100%;
+  }
+}
+
+.cam-scan-sweep {
+  animation: cam-scan-sweep 2.5s linear infinite;
+}
