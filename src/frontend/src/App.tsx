@@ -140,7 +140,7 @@ async function callYAC(query: string, modeHint?: string): Promise<string> {
     nowUtc.getTimezoneOffset() * 60 * 1000;
   const istDate = new Date(istMs);
   const istStr = istDate.toUTCString().replace("GMT", "IST");
-  let systemPrompt = `You are YAC, Iron Man\'s AI. Current time is ${istStr} (IST, UTC+5:30). Always reference IST when discussing time. Be concise under 100 words.`;
+  let systemPrompt = `You are YAC, Iron Man\'s AI assistant based in India. Current time is ${istStr} (IST, UTC+5:30). Always reference IST when discussing time. When asked about news, weather, sports, or current events without a specific location, default to India. Be concise under 100 words.`;
 
   if (modeHint) {
     systemPrompt += ` ${modeHint}`;
@@ -1295,11 +1295,14 @@ export default function App() {
   const cameraStreamRef = useRef<MediaStream | null>(null);
 
   const recognitionRef = useRef<any>(null);
+  const toggleListeningRef = useRef<(() => void) | null>(null);
   const retryCountRef = useRef(0);
   const [wakeWordActive, setWakeWordActive] = useState(false);
   const [wakeWordDetected, setWakeWordDetected] = useState(false);
   const wakeListenerRef = useRef<any>(null);
   const wakeWordActiveRef = useRef(false);
+  const continuousListenRef = useRef(false);
+  const [continuousMode, setContinuousMode] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("");
 
   // Connectivity check — run on mount and every 30 seconds
@@ -1541,6 +1544,14 @@ export default function App() {
           prev.filter((m) => m.id !== pendingId).concat(responseMsg),
         );
         speakText(response);
+        // Auto-restart listening if continuous mode is active
+        if (continuousListenRef.current) {
+          setTimeout(() => {
+            if (continuousListenRef.current) {
+              toggleListeningRef.current?.();
+            }
+          }, 2500);
+        }
       } catch (_err) {
         setChatMessages((prev) =>
           prev.map((m) =>
@@ -1572,6 +1583,8 @@ export default function App() {
       return;
     }
     if (listening) {
+      continuousListenRef.current = false;
+      setContinuousMode(false);
       recognitionRef.current?.stop();
       setListening(false);
       return;
@@ -1586,6 +1599,8 @@ export default function App() {
       retryCountRef.current = 0;
       const transcript = event.results[0][0].transcript;
       setListening(false);
+      setContinuousMode(true);
+      continuousListenRef.current = true;
       sendMessage(transcript);
     };
     recognition.onerror = (event: any) => {
@@ -1626,7 +1641,13 @@ export default function App() {
     recognition.onend = () => {
       setListening(false);
       if (!resultReceived && !wakeWordActiveRef.current) {
-        setVoiceStatus("NO SPEECH DETECTED - TRY AGAIN");
+        if (continuousListenRef.current) {
+          setTimeout(() => {
+            if (continuousListenRef.current) toggleListeningRef.current?.();
+          }, 500);
+        } else {
+          setVoiceStatus("NO SPEECH DETECTED - TRY AGAIN");
+        }
       }
       if (wakeWordActiveRef.current) {
         setTimeout(() => startWakeListener(), 300);
@@ -1636,6 +1657,9 @@ export default function App() {
     recognition.start();
     setListening(true);
   }, [listening, sendMessage]);
+
+  // Keep toggleListeningRef in sync so sendMessage can call it without circular deps
+  toggleListeningRef.current = toggleListening;
 
   // Wake word aliases — catches "jar", "jarvis", common mishears
   const WAKE_WORDS = [
@@ -2233,6 +2257,17 @@ export default function App() {
                       JARVIS DETECTED!
                     </span>
                   )}
+                  {continuousMode && !wakeWordActive && (
+                    <span
+                      className="text-xs font-bold tracking-widest uppercase tech-font animate-pulse"
+                      style={{
+                        color: "oklch(0.72 0.18 220)",
+                        textShadow: "0 0 8px oklch(0.72 0.18 220 / 0.7)",
+                      }}
+                    >
+                      ● CONTINUOUS
+                    </span>
+                  )}
                 </div>
 
                 {/* Voice status message */}
@@ -2283,16 +2318,18 @@ export default function App() {
                   {[
                     {
                       label: "NEWS",
-                      query: "What are the top news headlines right now today?",
+                      query:
+                        "What are the top news headlines in India right now today? Give me 3-4 key stories.",
                     },
                     {
                       label: "WEATHER",
-                      query: "What is the current weather forecast today?",
+                      query:
+                        "What is the current weather like in major Indian cities like Mumbai, Delhi, Bangalore today?",
                     },
                     {
                       label: "SPORTS",
                       query:
-                        "What are the latest sports scores and results today?",
+                        "What are the latest cricket scores and sports results in India today?",
                     },
                     {
                       label: "TIME",
