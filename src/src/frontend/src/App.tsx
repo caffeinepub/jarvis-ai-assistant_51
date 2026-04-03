@@ -1637,155 +1637,68 @@ export default function App() {
     setListening(true);
   }, [listening, sendMessage]);
 
-  // Wake word aliases — catches "jar", "jarvis", common mishears
-  const WAKE_WORDS = [
-    "jar",
-    "jarvis",
-    "jab",
-    "job",
-    "char",
-    "yar",
-    "ya",
-    "dr",
-    "guard",
-  ];
-
   const startWakeListener = useCallback(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition ||
       (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition || !wakeWordActiveRef.current) return;
-
-    // Clear any existing listener first
-    if (wakeListenerRef.current) {
-      try {
-        wakeListenerRef.current.onend = null;
-        wakeListenerRef.current.onerror = null;
-        wakeListenerRef.current.stop();
-      } catch (_) {}
-      wakeListenerRef.current = null;
-    }
-
-    setVoiceStatus('WAKE ACTIVE · SAY "JAR"');
-
-    let sessionActive = true;
-    const restartWake = (delayMs = 0) => {
-      if (!wakeWordActiveRef.current || !sessionActive) return;
-      if (delayMs > 0) {
-        setTimeout(() => {
-          if (wakeWordActiveRef.current && sessionActive) startWakeListener();
-        }, delayMs);
-      } else {
-        // Immediate restart — use microtask queue to avoid re-entrancy
-        Promise.resolve().then(() => {
-          if (wakeWordActiveRef.current && sessionActive) startWakeListener();
-        });
-      }
-    };
-
     try {
       const wakeRec = new SpeechRecognition();
       wakeRec.lang = "en-US";
-      // Use continuous=false, maxAlternatives=3 for better single-utterance detection
-      // Non-continuous mode is more reliable on mobile and avoids browser auto-stop
-      wakeRec.continuous = false;
-      wakeRec.interimResults = false;
-      wakeRec.maxAlternatives = 3;
-
+      wakeRec.continuous = true;
+      wakeRec.interimResults = true;
+      wakeRec.maxAlternatives = 1;
       wakeRec.onresult = (event: any) => {
-        // Check all alternatives for any wake word match
-        const alts: string[] = [];
-        for (let i = 0; i < event.results.length; i++) {
-          for (let j = 0; j < event.results[i].length; j++) {
-            alts.push(event.results[i][j].transcript.toLowerCase().trim());
-          }
-        }
-        const combined = alts.join(" ");
-        const isWakeWord = WAKE_WORDS.some((w) => combined.includes(w));
-
-        if (isWakeWord) {
-          sessionActive = false;
-          try {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript.toLowerCase();
+          if (transcript.includes("jar")) {
+            // Wake word detected!
             wakeRec.stop();
-          } catch (_) {}
-          setWakeWordDetected(true);
-          setVoiceStatus("WAKE WORD DETECTED · LISTENING...");
-          setTimeout(() => setWakeWordDetected(false), 2000);
-
-          // Start command recognition after brief delay
-          setTimeout(() => {
-            if (!wakeWordActiveRef.current) return;
+            setWakeWordDetected(true);
+            setTimeout(() => setWakeWordDetected(false), 2000);
+            // Start command recognition
             const SR2 =
               (window as any).SpeechRecognition ||
               (window as any).webkitSpeechRecognition;
             const cmdRec = new SR2();
             cmdRec.lang = "en-US";
-            cmdRec.continuous = false;
             cmdRec.interimResults = false;
             cmdRec.maxAlternatives = 1;
-            let cmdReceived = false;
             cmdRec.onresult = (ev: any) => {
-              cmdReceived = true;
               const cmd = ev.results[0][0].transcript;
               setListening(false);
-              setVoiceStatus("");
               sendMessage(cmd);
             };
             cmdRec.onerror = () => {
               setListening(false);
-              if (wakeWordActiveRef.current) startWakeListener();
+              if (wakeWordActiveRef.current)
+                setTimeout(() => startWakeListener(), 500);
             };
             cmdRec.onend = () => {
               setListening(false);
-              if (!cmdReceived)
-                setVoiceStatus('NO COMMAND HEARD · SAY "JAR" AGAIN');
               if (wakeWordActiveRef.current)
-                setTimeout(() => startWakeListener(), 300);
+                setTimeout(() => startWakeListener(), 500);
             };
             recognitionRef.current = cmdRec;
             setListening(true);
-            try {
-              cmdRec.start();
-            } catch (_) {
-              setListening(false);
-              if (wakeWordActiveRef.current) startWakeListener();
-            }
-          }, 100);
-        } else {
-          // Not a wake word — restart immediately to keep listening
-          restartWake(0);
+            cmdRec.start();
+            break;
+          }
         }
       };
-
-      wakeRec.onerror = (e: any) => {
-        const errCode = e?.error || "";
-        // aborted/no-speech are normal — restart immediately
-        if (errCode === "aborted" || errCode === "no-speech") {
-          restartWake(0);
-        } else if (
-          errCode === "not-allowed" ||
-          errCode === "permission-denied"
-        ) {
-          sessionActive = false;
-          setVoiceStatus("MICROPHONE DENIED · CHECK BROWSER SETTINGS");
-          wakeWordActiveRef.current = false;
-          setWakeWordActive(false);
-        } else {
-          // network/other — brief pause then restart
-          restartWake(500);
-        }
+      wakeRec.onerror = () => {
+        if (wakeWordActiveRef.current)
+          setTimeout(() => startWakeListener(), 1000);
       };
-
       wakeRec.onend = () => {
-        // Always restart unless we deliberately stopped (sessionActive=false)
-        if (sessionActive) restartWake(0);
+        if (wakeWordActiveRef.current) {
+          setTimeout(() => startWakeListener(), 300);
+        }
       };
-
       wakeListenerRef.current = wakeRec;
       wakeRec.start();
     } catch (_e) {
-      // If start() throws (e.g. already running), retry after a tick
-      restartWake(200);
+      // ignore
     }
   }, [sendMessage]);
 
@@ -1802,15 +1715,8 @@ export default function App() {
     if (wakeWordActive) {
       wakeWordActiveRef.current = false;
       setWakeWordActive(false);
-      if (wakeListenerRef.current) {
-        try {
-          wakeListenerRef.current.onend = null;
-          wakeListenerRef.current.onerror = null;
-          wakeListenerRef.current.stop();
-        } catch (_) {}
-        wakeListenerRef.current = null;
-      }
-      setVoiceStatus("");
+      wakeListenerRef.current?.stop();
+      wakeListenerRef.current = null;
     } else {
       wakeWordActiveRef.current = true;
       setWakeWordActive(true);
