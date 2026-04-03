@@ -62,22 +62,43 @@ function needsMultilingualHint(text: string): boolean {
   return text.length > 0 && nonAscii / text.length > 0.2;
 }
 
+// ─── Connectivity check ────────────────────────────────────────────────────
+async function checkConnectivity(): Promise<boolean> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), 2000);
+  try {
+    const res = await fetch("https://text.pollinations.ai/", {
+      method: "HEAD",
+      signal: controller.signal,
+      keepalive: true,
+    });
+    clearTimeout(id);
+    return res.ok || res.status < 500;
+  } catch {
+    clearTimeout(id);
+    return false;
+  }
+}
+
 // Free AI via Pollinations.ai — all models raced in parallel for max speed
-async function callGeminiAPI(
-  query: string,
-  modeHint?: string,
-): Promise<string> {
-  const nowStr = new Date().toISOString();
-  let systemPrompt = `You are YAC, an advanced Iron Man-style AI assistant. Today is ${nowStr}. You have real-time knowledge of news, weather, sports, stocks, and current events. Be direct and concise. Answer in under 200 words.`;
+async function callYAC(query: string, modeHint?: string): Promise<string> {
+  const nowUtc = new Date();
+  const istMs =
+    nowUtc.getTime() +
+    5.5 * 60 * 60 * 1000 -
+    nowUtc.getTimezoneOffset() * 60 * 1000;
+  const istDate = new Date(istMs);
+  const istStr = istDate.toUTCString().replace("GMT", "IST");
+  let systemPrompt = `You are YAC, Iron Man's AI. Current time is ${istStr} (IST, UTC+5:30). Always reference IST when discussing time. Be concise under 100 words.`;
 
   if (modeHint) {
     systemPrompt += ` ${modeHint}`;
   }
 
-  // GET endpoint — no CORS preflight, very reliable
-  const makeGet = async (model: string): Promise<string> => {
+  // Phase 1 — GET race: 9 models in parallel, keepalive
+  const makeGet = async (model: string, timeout: number): Promise<string> => {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 5000);
+    const id = setTimeout(() => controller.abort(), timeout);
     try {
       const prompt = encodeURIComponent(
         `${systemPrompt}\n\nUser: ${query}\n\nAssistant:`,
@@ -86,6 +107,7 @@ async function callGeminiAPI(
         `https://text.pollinations.ai/${prompt}?model=${model}&nologo=true`,
         {
           signal: controller.signal,
+          keepalive: true,
         },
       );
       clearTimeout(id);
@@ -105,7 +127,7 @@ async function callGeminiAPI(
     }
   };
 
-  // POST endpoint
+  // Phase 2 — POST race: 4 models, 5s timeout, keepalive
   const makePost = async (model: string): Promise<string> => {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 5000);
@@ -119,9 +141,10 @@ async function callGeminiAPI(
             { role: "user", content: query },
           ],
           model,
-          max_tokens: 400,
+          max_tokens: 150,
         }),
         signal: controller.signal,
+        keepalive: true,
       });
       clearTimeout(id);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -135,25 +158,25 @@ async function callGeminiAPI(
     }
   };
 
-  // Race GET endpoints across 9 models in parallel (fastest, most reliable)
+  // Phase 1 — race GET endpoints across 9 models (4s timeout)
   try {
     const result = await Promise.any([
-      makeGet("openai"),
-      makeGet("mistral"),
-      makeGet("llama"),
-      makeGet("openai-large"),
-      makeGet("phi"),
-      makeGet("gemma"),
-      makeGet("claude"),
-      makeGet("command-r"),
-      makeGet("qwen-coder"),
+      makeGet("openai", 4000),
+      makeGet("mistral", 4000),
+      makeGet("llama", 4000),
+      makeGet("openai-large", 4000),
+      makeGet("phi", 4000),
+      makeGet("gemma", 4000),
+      makeGet("claude", 4000),
+      makeGet("command-r", 4000),
+      makeGet("qwen-coder", 4000),
     ]);
     if (result) return result;
   } catch {
-    // GET attempts failed, try POST
+    // Phase 1 failed, try Phase 2
   }
 
-  // POST fallback
+  // Phase 2 — POST fallback across 4 models (5s timeout)
   try {
     const result = await Promise.any([
       makePost("openai"),
@@ -163,33 +186,28 @@ async function callGeminiAPI(
     ]);
     if (result) return result;
   } catch {
-    // all failed
+    // Phase 2 failed, try Phase 3 auto-retry
+  }
+
+  // Phase 3 — auto-retry Phase 1 with 3s timeout
+  try {
+    const result = await Promise.any([
+      makeGet("openai", 3000),
+      makeGet("mistral", 3000),
+      makeGet("llama", 3000),
+      makeGet("openai-large", 3000),
+      makeGet("phi", 3000),
+      makeGet("gemma", 3000),
+      makeGet("claude", 3000),
+      makeGet("command-r", 3000),
+      makeGet("qwen-coder", 3000),
+    ]);
+    if (result) return result;
+  } catch {
+    // all attempts failed
   }
 
   return "YAC systems offline. All AI endpoints are unreachable. Please try again in a moment.";
-}
-
-// ─── DuckDuckGo JSON parser ────────────────────────────────────────────────
-function parseDuckDuckGoResponse(raw: string): string {
-  if (!raw || !raw.trim())
-    return "I could not find a specific answer for that. Try rephrasing your question.";
-  try {
-    const data = JSON.parse(raw);
-    const answer = data.AbstractText || data.Answer || data.Definition || "";
-    if (answer.trim()) return answer.trim();
-    if (data.RelatedTopics?.length > 0) {
-      const first = data.RelatedTopics[0];
-      const text = first.Text || first.Topics?.[0]?.Text || "";
-      if (text.trim()) return text.trim();
-    }
-    if (data.Heading && data.AbstractSource) {
-      return `${data.Heading}: No detailed summary found. Try searching for more specifics.`;
-    }
-    return "I could not find a specific answer for that. Try rephrasing your question.";
-  } catch {
-    if (raw.length > 5 && !raw.startsWith("{")) return raw;
-    return "I could not find a specific answer for that. Try rephrasing your question.";
-  }
 }
 
 // ─── Voice loader helper ──────────────────────────────────────────────────────
@@ -668,7 +686,14 @@ function SystemStatusPanel({
   useEffect(() => {
     const tick = () => {
       const now = new Date();
-      setCurrentTime(now.toLocaleTimeString("en-US", { hour12: false }));
+      const istOffset = 5.5 * 60 * 60 * 1000;
+      const ist = new Date(
+        now.getTime() + istOffset - now.getTimezoneOffset() * 60 * 1000,
+      );
+      const hh = String(ist.getUTCHours()).padStart(2, "0");
+      const mm = String(ist.getUTCMinutes()).padStart(2, "0");
+      const ss = String(ist.getUTCSeconds()).padStart(2, "0");
+      setCurrentTime(`${hh}:${mm}:${ss} IST`);
     };
     tick();
     const id = setInterval(tick, 1000);
@@ -687,7 +712,7 @@ function SystemStatusPanel({
       value: String(messageCount),
       color: "oklch(0.78 0.15 75)",
     },
-    { label: "SYS TIME", value: currentTime, color: "oklch(0.72 0.18 220)" },
+    { label: "IST TIME", value: currentTime, color: "oklch(0.72 0.18 220)" },
     { label: "UPTIME", value: uptime, color: "oklch(0.65 0.18 220)" },
     { label: "STATUS", value: "OPERATIONAL", color: "oklch(0.7 0.18 145)" },
     { label: "POWER", value: "100%", color: "oklch(0.78 0.15 75)" },
@@ -1228,7 +1253,8 @@ export default function App() {
   const { actor: _actor } = useActor();
   const _queryClient = useQueryClient();
   const { data: remoteMessages = [] } = useGetAllMessages();
-  const { data: connected = false } = useIsConnected();
+  const { data: _queryConnected = false } = useIsConnected();
+  const [isOnline, setIsOnline] = useState(false);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
     try {
@@ -1262,6 +1288,21 @@ export default function App() {
   const wakeWordActiveRef = useRef(false);
   const [voiceStatus, setVoiceStatus] = useState("");
 
+  // Connectivity check — run on mount and every 30 seconds
+  useEffect(() => {
+    let mounted = true;
+    const check = async () => {
+      const online = await checkConnectivity();
+      if (mounted) setIsOnline(online);
+    };
+    check();
+    const id = setInterval(check, 30000);
+    return () => {
+      mounted = false;
+      clearInterval(id);
+    };
+  }, []);
+
   // Uptime counter
   useEffect(() => {
     const id = setInterval(() => {
@@ -1278,6 +1319,10 @@ export default function App() {
   useEffect(() => {
     const tick = () => {
       const now = new Date();
+      const istOffset = 5.5 * 60 * 60 * 1000;
+      const ist = new Date(
+        now.getTime() + istOffset - now.getTimezoneOffset() * 60 * 1000,
+      );
       const months = [
         "JAN",
         "FEB",
@@ -1292,13 +1337,13 @@ export default function App() {
         "NOV",
         "DEC",
       ];
-      const mon = months[now.getMonth()];
-      const day = String(now.getDate()).padStart(2, "0");
-      const yr = now.getFullYear();
-      const hh = String(now.getHours()).padStart(2, "0");
-      const mm = String(now.getMinutes()).padStart(2, "0");
-      const ss = String(now.getSeconds()).padStart(2, "0");
-      setLiveTime(`${mon} ${day} ${yr} | ${hh}:${mm}:${ss}`);
+      const mon = months[ist.getUTCMonth()];
+      const day = String(ist.getUTCDate()).padStart(2, "0");
+      const yr = ist.getUTCFullYear();
+      const hh = String(ist.getUTCHours()).padStart(2, "0");
+      const mm = String(ist.getUTCMinutes()).padStart(2, "0");
+      const ss = String(ist.getUTCSeconds()).padStart(2, "0");
+      setLiveTime(`${mon} ${day} ${yr} | ${hh}:${mm}:${ss} IST`);
     };
     tick();
     const id = setInterval(tick, 1000);
@@ -1332,7 +1377,7 @@ export default function App() {
         seeded.push({
           id: `remote-jarvis-${entry.id}`,
           role: "assistant",
-          content: parseDuckDuckGoResponse(entry.response.content),
+          content: entry.response.content,
           timestamp: Number(entry.response.timestamp),
         });
       }
@@ -1465,7 +1510,7 @@ export default function App() {
       setChatMessages((prev) => [...prev, userMsg, pendingMsg]);
       setTextInput("");
       try {
-        const response = await callGeminiAPI(text.trim(), modeHint);
+        const response = await callYAC(text.trim(), modeHint);
         const responseMsg: ChatMessage = {
           id: `jarvis-${Date.now()}`,
           role: "assistant",
@@ -1824,18 +1869,43 @@ export default function App() {
 
         {/* CTAs */}
         <div className="flex items-center gap-3">
+          {/* NET pulsing status dot */}
+          <div
+            className="flex items-center gap-1 tech-font"
+            style={{
+              fontSize: "9px",
+              color: "oklch(0.45 0.06 75)",
+              letterSpacing: "0.1em",
+            }}
+          >
+            <div
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: isOnline
+                  ? "oklch(0.7 0.25 145)"
+                  : "oklch(0.65 0.3 25)",
+                boxShadow: isOnline
+                  ? "0 0 6px oklch(0.7 0.25 145 / 0.9)"
+                  : "0 0 6px oklch(0.65 0.3 25 / 0.9)",
+                animation: "pulse 1.5s ease-in-out infinite",
+              }}
+            />
+            NET
+          </div>
           <div
             className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 tech-font"
             style={{
-              background: connected
+              background: isOnline
                 ? "oklch(0.25 0.1 145 / 0.2)"
                 : "oklch(0.25 0.15 25 / 0.2)",
-              border: `1px solid ${connected ? "oklch(0.55 0.15 145 / 0.5)" : "oklch(0.48 0.22 25 / 0.5)"}`,
-              color: connected ? "oklch(0.7 0.18 145)" : "oklch(0.65 0.25 25)",
+              border: `1px solid ${isOnline ? "oklch(0.55 0.15 145 / 0.5)" : "oklch(0.48 0.22 25 / 0.5)"}`,
+              color: isOnline ? "oklch(0.7 0.18 145)" : "oklch(0.65 0.25 25)",
             }}
           >
-            {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
-            {connected ? "ONLINE" : "OFFLINE"}
+            {isOnline ? <Wifi size={12} /> : <WifiOff size={12} />}
+            {isOnline ? "ONLINE" : "OFFLINE"}
           </div>
           <button
             type="button"
@@ -2197,7 +2267,7 @@ export default function App() {
               className="hidden lg:block w-72 flex-shrink-0"
             >
               <SystemStatusPanel
-                connected={connected}
+                connected={isOnline}
                 messageCount={
                   chatMessages.filter((m) => m.role === "user").length
                 }
@@ -2211,7 +2281,7 @@ export default function App() {
           <div className="lg:hidden w-full max-w-md mt-8 space-y-4">
             <ChatTranscriptPanel messages={chatMessages} />
             <SystemStatusPanel
-              connected={connected}
+              connected={isOnline}
               messageCount={
                 chatMessages.filter((m) => m.role === "user").length
               }
