@@ -1705,11 +1705,7 @@ export default function App() {
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
     try {
-      const stored = localStorage.getItem("yac-history");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed.slice(-50);
-      }
+      localStorage.removeItem("yac-history");
     } catch (_e) {
       // ignore
     }
@@ -2904,6 +2900,40 @@ export default function App() {
                       {label}
                     </button>
                   ))}
+                  {/* Clear history button */}
+                  <button
+                    type="button"
+                    data-ocid="clear.history.button"
+                    onClick={() => {
+                      setChatMessages([]);
+                      try {
+                        localStorage.removeItem("yac-history");
+                      } catch (_e) {
+                        /* ignore */
+                      }
+                    }}
+                    className="px-3 py-1 text-[10px] font-bold tracking-[0.2em] uppercase tech-font transition-all hover:scale-105 active:scale-95"
+                    style={{
+                      background: "oklch(0.65 0.25 25 / 0.08)",
+                      border: "1px solid oklch(0.65 0.25 25 / 0.4)",
+                      color: "oklch(0.65 0.25 25)",
+                      boxShadow: "0 0 8px oklch(0.65 0.25 25 / 0.15)",
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLElement).style.boxShadow =
+                        "0 0 16px oklch(0.65 0.25 25 / 0.5)";
+                      (e.currentTarget as HTMLElement).style.background =
+                        "oklch(0.65 0.25 25 / 0.18)";
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLElement).style.boxShadow =
+                        "0 0 8px oklch(0.65 0.25 25 / 0.15)";
+                      (e.currentTarget as HTMLElement).style.background =
+                        "oklch(0.65 0.25 25 / 0.08)";
+                    }}
+                  >
+                    CLEAR
+                  </button>
                 </div>
 
                 {/* Text input fallback */}
