@@ -77,6 +77,7 @@ interface ChatMessage {
   content: string;
   pending?: boolean;
   timestamp: number;
+  isLive?: boolean;
 }
 
 // ─── Emotion Detection ───────────────────────────────────────────────────────
@@ -108,18 +109,25 @@ function needsMultilingualHint(text: string): boolean {
   return text.length > 0 && nonAscii / text.length > 0.2;
 }
 
+// ─── In-flight deduplication ─────────────────────────────────────────────────
+const _inFlightRequests = new Map<string, Promise<string>>();
+
 // ─── Connectivity check ────────────────────────────────────────────────────
 async function checkConnectivity(): Promise<boolean> {
   // Try multiple lightweight endpoints to verify online status
   const tests = [
     fetch("https://text.pollinations.ai/", {
       method: "HEAD",
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(2000),
     }),
     fetch("https://www.google.com/generate_204", {
       method: "HEAD",
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(2000),
     }),
+    fetch("https://api.pollinations.ai/v1/models", {
+      method: "GET",
+      signal: AbortSignal.timeout(2000),
+    }).catch(() => {}),
   ];
   try {
     const results = await Promise.allSettled(tests);
@@ -129,10 +137,148 @@ async function checkConnectivity(): Promise<boolean> {
   }
 }
 
+// ─── Pre-warm connections ────────────────────────────────────────────────────
+// Pre-warm connection to reduce cold-start latency
+function preWarmConnection(): void {
+  fetch("https://text.pollinations.ai/", {
+    method: "HEAD",
+    signal: AbortSignal.timeout(5000),
+    keepalive: true,
+  }).catch(() => {});
+  fetch("https://api.pollinations.ai/v1/models", {
+    method: "GET",
+    signal: AbortSignal.timeout(5000),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 // ─── AI Backend ───────────────────────────────────────────────────────────────
-// Pollinations.ai updated their model list. Only "openai-fast" (aliases: openai, gpt-oss)
-// is available for anonymous access. We use smart retry + staggered requests.
-async function callYAC(query: string, modeHint?: string): Promise<string> {
+// ─── Query Intent Classifier ────────────────────────────────────────────────
+function classifyQuery(
+  text: string,
+): "news" | "weather" | "sports" | "time" | "general" {
+  const lower = text.toLowerCase();
+  if (/\b(news|headline|happening|today|latest|current event)\b/.test(lower))
+    return "news";
+  if (/\b(weather|temperature|rain|forecast|humidity|climate)\b/.test(lower))
+    return "weather";
+  if (/\b(cricket|ipl|score|match|wicket|team|football|sport)\b/.test(lower))
+    return "sports";
+  if (/\b(time|clock|hour|minute|ist)\b/.test(lower)) return "time";
+  return "general";
+}
+
+// ─── Live Data Fetchers ───────────────────────────────────────────────────────
+async function fetchLiveNews(): Promise<string> {
+  try {
+    const res = await fetch(
+      "https://api.rss2json.com/v1/api.json?rss_url=https://feeds.feedburner.com/ndtvnews-india-news&count=5",
+      { signal: AbortSignal.timeout(4000) },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const items = data?.items;
+      if (Array.isArray(items) && items.length > 0) {
+        const headlines = items
+          .slice(0, 5)
+          .map((it: { title: string }) => `• ${it.title}`)
+          .join("\n");
+        return `LIVE INDIA NEWS HEADLINES:\n${headlines}`;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const res2 = await fetch(
+      "https://api.rss2json.com/v1/api.json?rss_url=https://timesofindia.indiatimes.com/rssfeedstopstories.cms&count=5",
+      { signal: AbortSignal.timeout(4000) },
+    );
+    if (res2.ok) {
+      const data2 = await res2.json();
+      const items2 = data2?.items;
+      if (Array.isArray(items2) && items2.length > 0) {
+        const headlines2 = items2
+          .slice(0, 5)
+          .map((it: { title: string }) => `• ${it.title}`)
+          .join("\n");
+        return `LIVE INDIA NEWS HEADLINES:\n${headlines2}`;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
+async function fetchLiveWeather(city = "Mumbai"): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://wttr.in/${encodeURIComponent(city)}?format=j1`,
+      { signal: AbortSignal.timeout(4000) },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const current = data?.current_condition?.[0];
+      if (current) {
+        const temp = current.temp_C;
+        const feels = current.FeelsLikeC;
+        const desc = current.weatherDesc?.[0]?.value;
+        const humidity = current.humidity;
+        const wind = current.windspeedKmph;
+        return `LIVE WEATHER IN ${city.toUpperCase()}: ${temp}°C (feels like ${feels}°C), ${desc}, humidity ${humidity}%, wind ${wind} km/h`;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
+async function fetchLiveCricket(): Promise<string> {
+  try {
+    const res = await fetch(
+      "https://api.rss2json.com/v1/api.json?rss_url=https://www.cricbuzz.com/rss/cricket-news&count=5",
+      { signal: AbortSignal.timeout(4000) },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const items = data?.items;
+      if (Array.isArray(items) && items.length > 0) {
+        const scores = items
+          .slice(0, 5)
+          .map((it: { title: string }) => `• ${it.title}`)
+          .join("\n");
+        return `LIVE CRICKET UPDATES:\n${scores}`;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
+async function fetchLiveContext(query: string): Promise<string> {
+  const intent = classifyQuery(query);
+  if (intent === "news") return fetchLiveNews();
+  if (intent === "weather") {
+    const cityMatch = query.match(/weather (?:in |at |of )?([a-zA-Z ]+)/i);
+    const city = cityMatch?.[1]?.trim() || "Mumbai";
+    return fetchLiveWeather(city);
+  }
+  if (intent === "sports") return fetchLiveCricket();
+  if (intent === "time") return ""; // already handled by network time sync
+  return "";
+}
+
+// Sequential-first strategy to avoid Pollinations.ai IP rate limiting.
+// Parallel requests from the same IP trigger 429s. We try one model at a time,
+// then fall back to alternative free AI providers (OpenRouter, Groq).
+async function _callYACInner(
+  query: string,
+  modeHint?: string,
+  liveContext?: string,
+): Promise<string> {
   const nowUtc = getNetworkAdjustedDate();
   const istMs =
     nowUtc.getTime() +
@@ -144,6 +290,11 @@ async function callYAC(query: string, modeHint?: string): Promise<string> {
 
   if (modeHint) {
     systemPrompt += ` ${modeHint}`;
+  }
+
+  // Inject real-time context if available
+  if (liveContext && liveContext.length > 0) {
+    systemPrompt += `\n\nREAL-TIME DATA (use this for your answer, do not fabricate additional facts):\n${liveContext}`;
   }
 
   const fullPrompt = `${systemPrompt}\n\nUser: ${query}\n\nAssistant:`;
@@ -191,31 +342,126 @@ async function callYAC(query: string, modeHint?: string): Promise<string> {
     return text;
   };
 
+  // ── Helper: OpenRouter free tier (no API key required for free models) ──
+  const tryOpenRouter = async (timeoutMs: number): Promise<string> => {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://yac-assistant.app",
+        "X-Title": "YAC Assistant",
+      },
+      body: JSON.stringify({
+        model: "mistralai/mistral-7b-instruct:free",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: query },
+        ],
+        max_tokens: 200,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+      keepalive: true,
+    });
+    if (!res.ok) throw new Error(`OpenRouter HTTP ${res.status}`);
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content?.trim();
+    if (!text) throw new Error("Empty response");
+    return text;
+  };
+
+  // ── Helper: HuggingFace Inference API text generation (free, no key) ──
+  const tryHuggingFaceText = async (timeoutMs: number): Promise<string> => {
+    const res = await fetch(
+      "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inputs: fullPrompt,
+          parameters: { max_new_tokens: 150, return_full_text: false },
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+        keepalive: true,
+      },
+    );
+    if (!res.ok) throw new Error(`HF HTTP ${res.status}`);
+    const data = await res.json();
+    const text = Array.isArray(data)
+      ? data[0]?.generated_text?.trim()
+      : data?.generated_text?.trim();
+    if (!text || text.length < 5) throw new Error("Empty response");
+    return text;
+  };
+
   // ── Working Pollinations models (as of Apr 2026) ──
-  // "openai-fast" is the current anonymous model; "openai", "gpt-oss", "gpt-oss-20b" are valid aliases
-  const MODELS = ["openai-fast", "openai", "gpt-oss", "gpt-oss-20b"];
+  // Use cached winning model first for faster reconnects
+  const cachedModel = sessionStorage.getItem("yac_fast_model");
+  const MODELS =
+    cachedModel &&
+    ["openai-fast", "openai", "gpt-oss", "gpt-oss-20b"].includes(cachedModel)
+      ? [
+          cachedModel,
+          ...["openai-fast", "openai", "gpt-oss", "gpt-oss-20b"].filter(
+            (m) => m !== cachedModel,
+          ),
+        ]
+      : ["openai-fast", "openai", "gpt-oss", "gpt-oss-20b"];
 
-  // Round 1 — 4 parallel GET requests, 7s timeout each
+  // ── Sequential-first strategy: single requests avoid IP rate limiting ──
+
+  // Step 1 — Try cached/best model via GET (fastest single request)
   try {
-    const result = await Promise.any(MODELS.map((m) => tryGet(m, 7000)));
-    if (result) return result;
+    const result = await tryGet(MODELS[0], 5000);
+    if (result) {
+      sessionStorage.setItem("yac_fast_model", MODELS[0]);
+      return result;
+    }
   } catch {
-    /* try next round */
+    /* try next */
   }
 
-  // Round 2 — 500ms pause then 4 parallel POST requests
-  await new Promise((r) => setTimeout(r, 500));
+  // Step 2 — Try second model via GET (different model, same IP quota resets)
   try {
-    const result = await Promise.any(MODELS.map((m) => tryPost(m, 8000)));
-    if (result) return result;
+    const result = await tryGet(MODELS[1], 5000);
+    if (result) {
+      sessionStorage.setItem("yac_fast_model", MODELS[1]);
+      return result;
+    }
   } catch {
-    /* try next round */
+    /* try next */
   }
 
-  // Round 3 — 1s pause then final GET retry with longer timeout
-  await new Promise((r) => setTimeout(r, 1000));
+  // Step 3 — Try POST endpoint with best model (different endpoint, avoids GET rate limit)
   try {
-    const result = await Promise.any(MODELS.map((m) => tryGet(m, 10000)));
+    const result = await tryPost(MODELS[0], 6000);
+    if (result) {
+      sessionStorage.setItem("yac_fast_model", MODELS[0]);
+      return result;
+    }
+  } catch {
+    /* try next */
+  }
+
+  // Step 4 — Race OpenRouter + remaining Pollinations models in parallel
+  try {
+    const result = await Promise.any([
+      tryOpenRouter(7000),
+      tryGet(MODELS[2], 6000),
+      tryGet(MODELS[3], 6000),
+      tryPost(MODELS[1], 7000),
+    ]);
+    if (result) return result;
+  } catch {
+    /* try final step */
+  }
+
+  // Step 5 — Final fallback: HuggingFace + remaining POST attempts
+  try {
+    const result = await Promise.any([
+      tryHuggingFaceText(10000),
+      tryPost(MODELS[2], 8000),
+      tryPost(MODELS[3], 8000),
+    ]);
     if (result) return result;
   } catch {
     /* all failed */
@@ -224,48 +470,121 @@ async function callYAC(query: string, modeHint?: string): Promise<string> {
   return "YAC systems offline. All AI endpoints are unreachable. Please try again in a moment.";
 }
 
+// ─── callYAC with in-flight deduplication ────────────────────────────────────
+async function callYAC(
+  query: string,
+  modeHint?: string,
+  liveContext?: string,
+): Promise<string> {
+  const key = query.trim().toLowerCase().slice(0, 100);
+  if (_inFlightRequests.has(key)) return _inFlightRequests.get(key)!;
+  const promise = _callYACInner(query, modeHint, liveContext).finally(() =>
+    _inFlightRequests.delete(key),
+  );
+  _inFlightRequests.set(key, promise);
+  return promise;
+}
+
 // ─── Vision AI Backend ────────────────────────────────────────────────────────
+// Converts base64 data URL to a Blob for binary API calls
+function dataURLtoBlob(dataURL: string): Blob {
+  const [header, b64] = dataURL.split(",");
+  const mime = header.match(/:(.*?);/)?.[1] ?? "image/jpeg";
+  const binary = atob(b64);
+  const arr = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
 async function callVisionAI(
   imageBase64: string,
   question: string,
 ): Promise<string> {
-  const VISION_MODELS = ["openai", "gpt-oss"];
+  // Strategy 1: Hugging Face BLIP image captioning (no API key, free tier)
+  const tryHuggingFaceBLIP = async (): Promise<string> => {
+    const blob = dataURLtoBlob(imageBase64);
+    const res = await fetch(
+      "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: blob,
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    if (!res.ok) throw new Error(`HF BLIP HTTP ${res.status}`);
+    const data = await res.json();
+    const caption = Array.isArray(data)
+      ? data[0]?.generated_text
+      : data?.generated_text;
+    if (!caption) throw new Error("No caption");
+    // Wrap caption in YAC voice
+    return `I can see: ${caption}. ${question.includes("describe") ? "" : "Scanning complete."}`;
+  };
 
-  const tryVisionPost = async (model: string): Promise<string> => {
+  // Strategy 2: Hugging Face ViT-GPT2 image captioning
+  const tryHuggingFaceViT = async (): Promise<string> => {
+    const blob = dataURLtoBlob(imageBase64);
+    const res = await fetch(
+      "https://api-inference.huggingface.co/models/nlpconnect/vit-gpt2-image-captioning",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: blob,
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    if (!res.ok) throw new Error(`HF ViT HTTP ${res.status}`);
+    const data = await res.json();
+    const caption = Array.isArray(data)
+      ? data[0]?.generated_text
+      : data?.generated_text;
+    if (!caption) throw new Error("No caption");
+    return `Visual analysis complete. I detect: ${caption}.`;
+  };
+
+  // Strategy 3: Pollinations with proper OpenAI vision format (base64 inline)
+  const tryPollinationsVision = async (): Promise<string> => {
     const res = await fetch("https://text.pollinations.ai/openai", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model,
+        model: "openai",
         max_tokens: 150,
         messages: [
           {
             role: "system",
             content:
-              "You are YAC, Iron Man's AI assistant. Analyze the image and respond in 1-2 concise sentences.",
+              "You are YAC, Iron Man's AI. Analyze the image briefly in 1-2 sentences.",
           },
           {
             role: "user",
             content: [
-              { type: "image_url", image_url: { url: imageBase64 } },
+              {
+                type: "image_url",
+                image_url: { url: imageBase64, detail: "low" },
+              },
               { type: "text", text: question },
             ],
           },
         ],
       }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Pollinations HTTP ${res.status}`);
     const data = await res.json();
     const text = data?.choices?.[0]?.message?.content?.trim();
-    if (!text) throw new Error("Empty response");
+    if (!text) throw new Error("Empty");
     return text;
   };
 
+  // Run all strategies in parallel, use first success
   try {
-    const result = await Promise.any(
-      VISION_MODELS.map((m) => tryVisionPost(m)),
-    );
+    const result = await Promise.any([
+      tryHuggingFaceBLIP(),
+      tryHuggingFaceViT(),
+      tryPollinationsVision(),
+    ]);
     if (result) return result;
   } catch {
     /* all failed */
@@ -702,6 +1021,18 @@ function ChatTranscriptPanel({ messages }: { messages: ChatMessage[] }) {
                   }}
                 >
                   {msg.role === "user" ? "YOU" : "J.A.R.V.I.S."}
+                  {msg.role === "assistant" && msg.isLive && (
+                    <span
+                      className="text-[8px] font-bold tracking-widest uppercase tech-font px-1.5 py-0.5 rounded"
+                      style={{
+                        background: "oklch(0.78 0.15 75 / 0.2)",
+                        border: "1px solid oklch(0.78 0.15 75 / 0.5)",
+                        color: "oklch(0.78 0.15 75)",
+                      }}
+                    >
+                      LIVE
+                    </span>
+                  )}
                 </span>
                 <div
                   className="text-xs px-3 py-2 rounded max-w-[90%]"
@@ -1412,6 +1743,7 @@ export default function App() {
 
   // Connectivity check — run on mount and every 30 seconds
   useEffect(() => {
+    preWarmConnection(); // Pre-warm connections immediately on mount
     let mounted = true;
     const check = async () => {
       const online = await checkConnectivity();
@@ -1638,12 +1970,14 @@ export default function App() {
       setChatMessages((prev) => [...prev, userMsg, pendingMsg]);
       setTextInput("");
       try {
-        const response = await callYAC(text.trim(), modeHint);
+        const liveContext = await fetchLiveContext(text.trim());
+        const response = await callYAC(text.trim(), modeHint, liveContext);
         const responseMsg: ChatMessage = {
           id: `jarvis-${Date.now()}`,
           role: "assistant",
           content: response,
           timestamp: Date.now(),
+          isLive: liveContext.length > 0,
         };
         setChatMessages((prev) =>
           prev.filter((m) => m.id !== pendingId).concat(responseMsg),

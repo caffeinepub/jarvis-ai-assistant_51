@@ -1,39 +1,49 @@
-# YAC - Version 32: Real Camera Vision
+# YAC AI Assistant — Real-Time Answers (Version 36)
 
 ## Current State
 
-The app has a `CameraHudPanel` component that shows a live camera feed via a `<video>` element in a floating HUD panel. A "INITIATE VISUAL SCAN" button exists but it only sends a generic text prompt (`"Describe what you see in my camera feed right now..."`) to the AI -- it does NOT actually capture or send any image data. The AI has no real visual input, so it cannot truly see anything.
+YAC (Version 35) is an Iron Man-themed AI voice assistant with:
+- Sequential AI backend using Pollinations.ai (`openai-fast` primary), OpenRouter and HuggingFace as fallbacks
+- System prompt includes current IST datetime so AI "knows" the date
+- Quick-action buttons (NEWS, WEATHER, SPORTS, TIME) that send plain text queries to the AI
+- Camera vision AI with Hugging Face BLIP/ViT-GPT2 models
+- Wake word, continuous listening, India context defaults
 
-The AI backend uses Pollinations.ai (`text.pollinations.ai`) for text queries. The POST endpoint (`/openai`) supports the OpenAI messages format.
+The AI answers are based on the model's training data only. For news, weather, sports, and current events, the AI makes up plausible-sounding but potentially stale or wrong answers because the underlying models have no live data access.
 
 ## Requested Changes (Diff)
 
 ### Add
-- A hidden `<canvas>` element co-located with the camera video, used to capture frames
-- A `captureFrameAsBase64()` utility function that draws the current video frame to canvas and returns a base64 JPEG data URL
-- A `callVisionAI(imageBase64, question)` function that calls the Pollinations `/openai` endpoint with the image as a base64 data URL in a vision-format message (role: user, content: [{type:"image_url", ...}, {type:"text", ...}]). Use model `openai` (GPT-4o supports vision). Fallback to `gpt-oss` if first fails.
-- Auto-scan mode: when camera is ON, automatically scan every 8 seconds and describe what is seen in the chat (only if something meaningful is detected -- skip if the description is very similar to the last one)
-- A visible "scanning" indicator animation in the camera panel while a vision scan is in progress
-- The SCAN button should now actually capture a real frame and send it to the vision AI
-- After a scan, YAC should speak the result aloud using the existing voice synthesis
+- **Real-time data fetcher**: Before sending any query to the AI, detect if the query is about news, weather, sports, time, or current events. If so, fetch live data from free public APIs:
+  - **News**: GNews API (free tier, no key for basic) or RSS-to-JSON via rss2json.com for India news (Times of India, NDTV)
+  - **Weather**: wttr.in (free, no API key) for current weather in Indian cities
+  - **Sports/Cricket**: Cricbuzz RSS via rss2json.com or cricapi.com free endpoints for live cricket scores
+  - **Time**: Already handled by network time sync (WorldTimeAPI)
+- **Context injection**: Prepend the fetched live data as context to the AI prompt so the AI generates an answer grounded in real current data
+- **Real-time badge**: Show a small "LIVE" badge in the chat when a response was augmented with real data
+- **Quick-action button enhancement**: NEWS, WEATHER, SPORTS buttons now pre-fetch live data before asking the AI
 
 ### Modify
-- `handleCameraScanBound`: instead of just calling `sendMessage("Describe what you...")`, it should capture a real frame with canvas, call the vision AI endpoint with the image, display the result in chat, and speak it
-- `CameraHudPanel` component: accept a `canvasRef` prop and render a hidden canvas element; add a `scanning` boolean prop to show a scanning animation/indicator
-- The camera panel should show a green "SCANNING" flash animation during vision AI processing
-- Camera panel should show an "AUTO-SCAN: ON" indicator when auto-scan is active (camera is on)
+- `callYAC` function: Accept an optional `liveContext` string parameter that gets prepended to the system prompt when available
+- Query intent detection: Classify queries as `news | weather | sports | time | general` before processing
+- Quick-action handlers: Trigger live data fetch for NEWS, WEATHER, SPORTS before AI call
+- Chat message display: Show `[LIVE]` badge on messages that used real-time data
+- System prompt: Instruct AI to use provided live context and not fabricate facts
 
 ### Remove
-- The old behavior of sending a text-only description request when SCAN is tapped
+- Nothing removed — this is an additive layer on top of the existing AI backend
 
 ## Implementation Plan
 
-1. Add `canvasRef = useRef<HTMLCanvasElement>(null)` to the main component alongside `videoRef`
-2. Add `captureFrameAsBase64()` function: draw video to canvas (320x240 for efficiency), return `canvas.toDataURL('image/jpeg', 0.7)`
-3. Add `callVisionAI(imageBase64: string, question: string): Promise<string>` function that POSTs to `https://text.pollinations.ai/openai` with model `openai`, messages formatted with image_url content type. Include YAC system prompt. Fallback to `gpt-oss`. 10s timeout.
-4. Add `[scanning, setScanning]` state boolean
-5. Replace `handleCameraScanBound` with a real function: capture frame → call vision AI → add assistant message to chat → speak result
-6. Add `useEffect` for auto-scan: when `cameraOn === true`, set an interval of 8000ms. Each tick: capture frame, call vision AI with "Briefly describe what you see in 1-2 sentences.", add to chat, speak if meaningful. Clear interval on `cameraOn === false` or unmount.
-7. Pass `canvasRef`, `scanning` to `CameraHudPanel`; render `<canvas ref={canvasRef} style={{display:'none'}} />` inside the panel
-8. Add scanning indicator: when `scanning` is true, show a pulsing amber border or overlay on the video with "SCANNING..." text
-9. Show "AUTO ● LIVE" indicator badge in the camera panel header when camera is on
+1. **Add query intent classifier**: simple regex/keyword function `classifyQuery(text)` returns `news | weather | sports | time | general`
+2. **Add live data fetchers** (all free, no API key):
+   - `fetchLiveNews()`: rss2json.com with NDTV/Times of India RSS feeds — returns top 5 headlines as text
+   - `fetchLiveWeather(city?)`: wttr.in JSON API for Mumbai/Delhi/Bangalore — returns current conditions
+   - `fetchLiveCricket()`: cricbuzz RSS via rss2json.com — returns live scores/match summary
+3. **Add `fetchLiveContext(query)` function**: Calls appropriate fetcher based on intent, returns context string or empty string if failed (graceful degradation — falls back to plain AI call)
+4. **Update `callYAC`**: Accept `liveContext` param, inject into system prompt before main prompt
+5. **Update `handleSendMessage`**: Call `fetchLiveContext` first, then pass context to `callYAC`
+6. **Update quick-action buttons**: Pass pre-defined context hints
+7. **Update `ChatMessage` type**: Add optional `isLive?: boolean` field
+8. **Update chat display**: Show gold `[LIVE]` badge on live-augmented assistant messages
+9. **Validate and deploy**
